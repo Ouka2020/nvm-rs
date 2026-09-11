@@ -2,12 +2,11 @@ use super::Result;
 use anyhow::bail;
 use derive_more::Deref;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::error;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use strum::Display;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]

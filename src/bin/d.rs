@@ -1,122 +1,28 @@
-use derive_more::{Deref, IntoIterator};
-use serde::Deserialize;
+use nvm_rs::Result;
+#[cfg(feature = "debug")]
+use nvm_rs::log_init;
+use std::path::PathBuf;
+use url::Url;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-#[allow(dead_code)]
-pub enum LtsSpec {
-  Codename(String),
-  NotLts(bool),
+fn main() -> Result {
+  #[cfg(feature = "debug")]
+  log_init();
+
+  download_file()
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct NodeReleaseInfo {
-  /// 版本号，如 "v26.8.1"
-  pub version: String,
+fn download_file() -> Result {
+  let url: Url =
+    r"https://npmmirror.com//mirrors/node/v20.12.2//node-v20.12.2-win-x64.zip"
+      .parse()?;
+  let url_str = url.as_str();
+  log::debug!("下载文件: {}", url_str);
 
-  /// 发布日期，格式 YYYY-MM-DD
-  // #[serde(deserialize_with = "deserialize_jiff_date")]
-  // #[allow(dead_code)]
-  // #[tabled(skip)]
-  // pub date: String,
+  let dest: PathBuf = r"g:\nvm\node-v20.12.2-win-x64.zip".parse()?;
+  nvm_rs::download_file(url, dest)?;
+  println!("下载完成");
 
-  /// 可用的构建产物/平台列表
-  // #[tabled(skip)]
-  pub files: Vec<String>,
-
-  // /// 捆绑的 npm 版本
-  // #[tabled(skip)]
-  // pub npm: Option<String>,
-
-  // /// V8 引擎版本
-  // #[tabled(skip)]
-  // pub v8: String,
-
-  // /// libuv 版本
-  // #[tabled(skip)]
-  // pub uv: Option<String>,
-
-  // /// zlib 版本
-  // #[tabled(skip)]
-  // pub zlib: Option<String>,
-
-  // /// OpenSSL 版本
-  // #[tabled(skip)]
-  // pub openssl: Option<String>,
-
-  // /// Node-API (ABI) 模块版本号
-  // #[tabled(skip)]
-  // #[serde(rename = "modules")]
-  // pub abi_version: Option<String>,
-
-  // /// 是否为 LTS（长期支持）版本
-  // #[tabled(skip)]
-  pub lts: LtsSpec,
-  // /// 是否为安全修复版本
-  // #[tabled(skip)]
-  // pub security: bool,
-}
-
-#[derive(Debug, Clone, Deserialize, Deref, IntoIterator)]
-#[serde(transparent)]
-struct Releases {
-  #[deref]
-  inner: Vec<NodeReleaseInfo>,
-}
-
-impl Releases {
-  pub fn latest(&self) -> String {
-    self.inner[0].version.clone()
-  }
-
-  pub fn latest_lts(&self) -> String {
-    self
-      .inner
-      .iter()
-      .find(|r| matches!(r.lts, LtsSpec::Codename(_)))
-      .map(|r| r.version.clone())
-      .unwrap_or_default()
-  }
-
-  pub fn latest_list(&self, count: usize) -> Vec<String> {
-    let mut list: Vec<_> = self
-      .inner
-      .iter()
-      .filter(|r| matches!(r.lts, LtsSpec::NotLts(false)))
-      .take(count)
-      .map(|r| r.version.clone())
-      .collect();
-
-    if list.len() < count {
-      for _ in 0..(count - list.len()) {
-        list.push("".to_string());
-      }
-    }
-
-    list
-  }
-
-  pub fn lts_list(&self, count: usize) -> Vec<String> {
-    let mut list: Vec<_> = self
-      .inner
-      .iter()
-      .filter(|r| matches!(r.lts, LtsSpec::Codename(_)))
-      .take(count)
-      .map(|r| r.version.clone())
-      .collect();
-
-    if list.len() < count {
-      for _ in 0..(count - list.len()) {
-        list.push("".to_string());
-      }
-    }
-
-    list
-  }
-}
-
-fn main() -> anyhow::Result<()> {
-  use_ureq()
+  Ok(())
 }
 
 // fn symlink() -> anyhow::Result<()> {
@@ -134,17 +40,17 @@ fn main() -> anyhow::Result<()> {
 //   Ok(())
 // }
 
-fn use_ureq() -> anyhow::Result<()> {
-  let resp: Releases =
-    ureq::get("https://npmmirror.com/mirrors/node/index.json")
-      .call()?
-      .body_mut()
-      .read_json()?;
-  // let data = resp.to_string();
-  println!("latest lts: {:?}", resp.latest_lts());
-  println!("latest: {:?}", resp.latest());
-  println!("latest list: {:?}", resp.latest_list(10));
-  println!("lts list: {:?}", resp.lts_list(10));
+// fn use_ureq() -> anyhow::Result<()> {
+//   let resp: ReleaseDatabase =
+//     ureq::get("https://npmmirror.com/mirrors/node/index.json")
+//       .call()?
+//       .body_mut()
+//       .read_json()?;
+//   // let data = resp.to_string();
+//   println!("latest lts: {:?}", resp.latest_lts());
+//   println!("latest: {:?}", resp.latest());
+//   println!("latest list: {:?}", resp.latest_list(10));
+//   println!("lts list: {:?}", resp.lts_list(10));
 
-  Ok(())
-}
+//   Ok(())
+// }
