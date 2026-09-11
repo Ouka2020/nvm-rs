@@ -22,16 +22,15 @@ anyhow = "1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 comfy-table = "8"
+derive_more = { version = "2", features = ["full"] }
 futures-util = "0"
 hex = "0"
 indicatif = "0"
-jiff = { version = "0", features = ["serde"] }
 junction = "2"
 log = "0"
 noyalib = { version = "0", optional = true }
 path-clean = "1"
 reqwest = { version = "0", features = ["default-tls", "stream"] }
-semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_repr = "0"
@@ -45,13 +44,16 @@ tracing-appender = { version = "0", optional = true }
 tracing-subscriber = { version = "0", features = [
   "env-filter"
 ], optional = true }
+ureq = { version = "3", optional = true, features = ["json"] }
+url = { version = "2", features = ["serde"] }
 winreg = { version = "0", optional = true }
 zip = "8"
 
 [features]
 debug   = ["dep:tracing", "dep:tracing-appender", "dep:tracing-subscriber"]
-default = ["debug", "yaml"]
+default = ["debug", "ureq", "yaml"]
 toml    = ["dep:toml"]
+ureq    = ["dep:ureq"]
 winreg  = ["dep:winreg"]
 yaml    = ["dep:noyalib"]
 

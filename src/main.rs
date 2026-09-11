@@ -1,11 +1,12 @@
 mod model;
 mod stream;
 
+#[cfg(feature = "debug")]
+use std::sync::OnceLock;
 use std::{
   env, fs,
   io::{BufReader, Read},
   path::{Path, PathBuf},
-  sync::OnceLock,
 };
 
 use anyhow::bail;
@@ -115,25 +116,15 @@ async fn main() -> Result<()> {
 }
 
 async fn list_remote_versions(config: model::Config) -> Result<()> {
-  let url = config
-    .node_mirror
-    .unwrap_or("https://nodejs.org/dist/latest".to_string());
-  let url = format!("{}/index.json", url);
-  log::debug!("url: {}", url);
+  // get_release_db appends "index.json" to the mirror base url itself.
+  let base_url = get_node_mirror(&config);
+  log::debug!("url: {}", base_url);
 
-  let release_database = get_release_db(&url).await?;
+  let release_database = get_release_db(&base_url).await?;
 
-  let latest_version = release_database
-    .latest_list(LIST_COUNT)
-    .iter()
-    .map(|r| r.version.clone())
-    .collect::<Vec<_>>();
+  let latest_version = release_database.latest_list(LIST_COUNT);
 
-  let lts_version = release_database
-    .lts_list(LIST_COUNT)
-    .iter()
-    .map(|r| r.version.clone())
-    .collect::<Vec<_>>();
+  let lts_version = release_database.lts_list(LIST_COUNT);
 
   log::debug!("latest_version: {:?}", latest_version);
   log::debug!("lts_version: {:?}", lts_version);
@@ -153,6 +144,12 @@ async fn list_remote_versions(config: model::Config) -> Result<()> {
 
   println!("{}", table);
 
+  //  You can use --full to show all versions.
+  println!(
+    "\n * Note: The list only shows the latest {} versions. Visit https://nodejs.org/en/ for more info.",
+    LIST_COUNT
+  );
+
   Ok(())
 }
 
@@ -160,7 +157,7 @@ fn list_local_versions(config: model::Config) -> Result<()> {
   let (current_version, current_arch) = get_current_version_and_arch();
   log::debug!("current version: {}({}bit)", current_version, current_arch);
 
-  let path = get_root(&config);
+  let path = get_root(&config)?;
   let versions = get_local_versions(path)?;
 
   println!();
@@ -214,29 +211,28 @@ where
 /// A tuple of strings, the first string is the version number, the second string is the architecture.
 /// (e.g. "v24.2.2", "64")
 fn get_current_version_and_arch() -> (String, String) {
-  let output = std::process::Command::new("node")
+  let Ok(output) = std::process::Command::new("node")
     .arg("-p")
     .arg("`${process.version},${process.arch}`") // print v24.2.2,x64
-    .output();
-
-  let stdout = match output {
-    Ok(output) => output.stdout,
-    Err(_) => return (String::new(), String::new()),
+    .output()
+  else {
+    return (String::new(), String::new());
   };
 
-  let stdout = String::from_utf8_lossy(&stdout);
-  let mut ps = stdout.trim_end().split(',');
-  let version = ps.next().unwrap().to_string();
-  let arch = ps.next().unwrap();
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  let mut parts = stdout.trim_end().split(',');
+
+  let Some(version) = parts.next() else {
+    return (String::new(), String::new());
+  };
+  let arch = match parts.next() {
+    Some("x64") => "64",
+    Some(_) => "32",
+    None => return (String::new(), String::new()),
+  };
   log::debug!("version: {}", version);
 
-  let arch = if arch == "x64" {
-    "64".to_string()
-  } else {
-    "32".to_string()
-  };
-
-  (version, arch)
+  (version.to_string(), arch.to_string())
 }
 
 fn get_processor_architecture() -> String {
@@ -247,14 +243,9 @@ fn get_processor_architecture() -> String {
   }
 
   match env::var("PROCESSOR_ARCHITECTURE") {
-    Ok(val) => {
-      let val = val.to_ascii_lowercase();
-      if val == "AMD64".to_string() {
-        "x64".to_string()
-      } else {
-        val
-      }
-    }
+    // todo: 没有考虑 arm 架构
+    Ok(val) if val.eq_ignore_ascii_case("AMD64") => "x64".to_string(),
+    Ok(val) => val.to_ascii_lowercase(),
     Err(_) => String::new(),
   }
 }
@@ -275,14 +266,16 @@ fn display_or_update_proxy(
   url: Option<String>,
 ) -> Result<()> {
   if let Some(url) = url {
-    config.proxy = Some(url);
-    config.save();
-  } else {
-    if let Some(proxy) = config.proxy {
-      println!("Current Proxy: {:?}", proxy);
+    config.proxy = if url.eq_ignore_ascii_case("none") {
+      None
     } else {
-      println!("No Proxy set.");
-    }
+      Some(url)
+    };
+    config.save()?;
+  } else if let Some(proxy) = config.proxy {
+    println!("Current Proxy: {:?}", proxy);
+  } else {
+    println!("No Proxy set.");
   }
 
   Ok(())
@@ -304,14 +297,12 @@ where
       bail!("path {:?} is not a directory", p);
     }
     config.root = Some(p.to_path_buf());
-    config.save();
-    println!("Current Root: {:?}", config.root.unwrap());
+    config.save()?;
+    println!("Current Root: {:?}", p);
+  } else if let Some(root) = config.root {
+    println!("Current Root: {:?}", root);
   } else {
-    if let Some(root) = config.root {
-      println!("Current Root: {:?}", root);
-    } else {
-      println!("No Root set.");
-    }
+    println!("No Root set.");
   }
 
   Ok(())
@@ -322,12 +313,10 @@ async fn list_versions(
   is_remote_request: bool,
 ) -> Result<()> {
   if is_remote_request {
-    list_remote_versions(config).await?;
+    list_remote_versions(config).await
   } else {
-    list_local_versions(config)?;
+    list_local_versions(config)
   }
-
-  Ok(())
 }
 
 fn display_or_update_node_mirror(
@@ -336,13 +325,11 @@ fn display_or_update_node_mirror(
 ) -> Result<()> {
   if let Some(url) = url {
     config.node_mirror = Some(url);
-    config.save();
+    config.save()?;
+  } else if let Some(node_mirror) = config.node_mirror {
+    println!("Current NodeMirror: {:?}", node_mirror);
   } else {
-    if let Some(node_mirror) = config.node_mirror {
-      println!("Current NodeMirror: {:?}", node_mirror);
-    } else {
-      println!("No NodeMirror set.");
-    }
+    println!("No NodeMirror set.");
   }
 
   Ok(())
@@ -354,19 +341,17 @@ fn display_or_update_npm_mirror(
 ) -> Result<()> {
   if let Some(url) = url {
     config.npm_mirror = Some(url);
-    config.save();
+    config.save()?;
+  } else if let Some(npm_mirror) = config.npm_mirror {
+    println!("Current NpmMirror: {:?}", npm_mirror);
   } else {
-    if let Some(npm_mirror) = config.npm_mirror {
-      println!("Current NpmMirror: {:?}", npm_mirror);
-    } else {
-      println!("No NpmMirror set.");
-    }
+    println!("No NpmMirror set.");
   }
 
   Ok(())
 }
 
-fn activate_version(config: model::Config) -> Result<()> {
+fn activate_version(_config: model::Config) -> Result<()> {
   Ok(())
 }
 
@@ -374,7 +359,7 @@ fn uninstall_version(
   config: model::Config,
   version: VersionSpec,
 ) -> Result<()> {
-  let root = get_root(&config);
+  let root = get_root(&config)?;
   let versions = get_local_versions(&root)?;
   log::debug!("local versions: {:?}", versions);
 
@@ -416,10 +401,11 @@ async fn install_version(
   arch: Option<ArchSpec>,
   skip_checksum: bool,
 ) -> Result<()> {
-  let root = get_root(&config);
+  let root = get_root(&config)?;
 
   let arch = get_arch(&arch);
   log::debug!("install: {:?} {}", version, arch);
+  tips(arch);
 
   let base_url = get_node_mirror(&config);
 
@@ -429,19 +415,20 @@ async fn install_version(
     bail!("version {} already installed", ver);
   }
 
-  let url = get_node_file_url(&ver, &arch, &base_url);
+  let url = get_node_file_url(&ver, arch, &base_url);
   log::debug!("download url: {}", url);
 
-  let root = Path::new(&root);
-  let path = Path::new(&url);
-  let file_name = Path::new(path.file_name().unwrap());
+  let root = root.as_path();
+  let Some(file_name) = Path::new(&url).file_name() else {
+    bail!("invalid download url: {url}");
+  };
   let zip_path = root.join(file_name);
 
   download_version(&url, &zip_path).await?;
 
   if !skip_checksum {
     let url = get_node_file_checksum_url(&ver, &base_url);
-    let checksum = load_checksum(&url, &ver, &arch).await?;
+    let checksum = load_checksum(&url, &ver, arch).await?;
     let valid = file_validate(&zip_path, &checksum)?;
     if !valid {
       bail!("sha256 checksum failed: {:?}", file_name);
@@ -452,28 +439,33 @@ async fn install_version(
 
   zip_extract(zip_path, root)?;
 
-  let org_path = root.join(file_name.with_extension(""));
-  let dist_path = root.join(ver);
-  log::debug!("rename: {:?} -> {:?}", org_path, dist_path);
+  let org_path = root.join(Path::new(file_name).with_extension(""));
+  let dist_path = root.join(&ver);
+  log::debug!("rename {:?} -> {:?}", org_path, dist_path);
   fs::rename(org_path, dist_path)?;
 
   delete_zip_files(root)?;
 
+  println!("install {} completed.", ver);
+
   Ok(())
 }
 
-fn delete_juntion_link<T>(link: T) -> Result<()>
+fn delete_junction_link<T>(link: T) -> Result<()>
 where
   T: AsRef<Path>,
 {
   let path = link.as_ref();
   log::debug!("delete link: {:?}", path);
-  let _ = fs::remove_dir(&path);
+  // 链接可能本来就不存在，忽略删除失败
+  if let Err(e) = fs::remove_dir(path) {
+    log::debug!("remove_dir failed: {e}");
+  }
 
   Ok(())
 }
 
-fn create_juntion_link<T, L>(link: T, target: L) -> Result<()>
+fn create_junction_link<T, L>(link: T, target: L) -> Result<()>
 where
   T: AsRef<Path>,
   L: AsRef<Path>,
@@ -487,13 +479,13 @@ where
   Ok(())
 }
 
-fn reset_juntion_link<T, L>(link: T, target: L) -> Result<()>
+fn reset_junction_link<T, L>(link: T, target: L) -> Result<()>
 where
   T: AsRef<Path>,
   L: AsRef<Path>,
 {
-  delete_juntion_link(&link)?;
-  create_juntion_link(link, target)?;
+  delete_junction_link(&link)?;
+  create_junction_link(link, target)?;
 
   Ok(())
 }
@@ -503,7 +495,7 @@ async fn switch_version(
   version: VersionSpec,
   arch: Option<ArchSpec>,
 ) -> Result<()> {
-  let root = get_root(&config);
+  let root = get_root(&config)?;
   let arch = get_arch(&arch);
 
   let base_url = get_node_mirror(&config);
@@ -519,11 +511,22 @@ async fn switch_version(
   let node_path = root.join(&ver).clean();
 
   // 创建符号链接, 仅在 Windows 上有效
-  reset_juntion_link(get_nvm_symlink()?, node_path)?;
+  reset_junction_link(get_nvm_symlink()?, node_path)?;
 
   println!("switch to {} success.", ver);
 
+  // 提示用户使用 64 位版本
+  tips(arch);
+
   Ok(())
+}
+
+fn tips(arch: &str) {
+  if arch != "x64" {
+    println!(
+      "\n* Notice: Starting from version v23.0.0, 32-bit version are no longer available. Please use the 64-bit version."
+    );
+  }
 }
 
 fn file_validate<T>(path: T, sha256_checksum: &str) -> Result<bool>
@@ -536,13 +539,16 @@ where
   let mut reader = BufReader::with_capacity(256 * 1024, file);
   let mut hasher = sha2::Sha256::new();
   let mut buf = [0u8; 64 * 1024];
-  while let Ok(n) = reader.read(&mut buf)
-    && n > 0
-  {
+  // 读取错误必须向上传播，避免对损坏的半成品文件计算出错误摘要
+  loop {
+    let n = reader.read(&mut buf)?;
+    if n == 0 {
+      break;
+    }
     hasher.update(&buf[..n]);
   }
 
-  Ok(hex::encode(hasher.finalize()).eq(sha256_checksum))
+  Ok(hex::encode(hasher.finalize()) == sha256_checksum)
 }
 
 /// 检查服务器上的版本是否存在, 如果不存在则报错<br>
@@ -559,21 +565,21 @@ where
   let ver = match version {
     VersionSpec::Latest => {
       if let Some(latest_version) = db.latest() {
-        &latest_version.version
+        latest_version
       } else {
         bail!("No latest version found.")
       }
     }
     VersionSpec::Lts => {
       if let Some(lts_version) = db.latest_lts() {
-        &lts_version.version
+        lts_version
       } else {
         bail!("No LTS version found.")
       }
     }
     VersionSpec::Exact(s) => {
-      if let Some(version_info) = db.get_by_version(&s.to_string()) {
-        &version_info.version
+      if db.version_exists(&s) {
+        s.to_string()
       } else {
         bail!("node v{} not installed.", s)
       }
@@ -581,31 +587,30 @@ where
   };
 
   let root = root.as_ref();
-  let exists = fs::exists(root.join(ver))?;
+  let exists = fs::exists(root.join(&ver))?;
 
-  Ok((exists, ver.to_string()))
+  Ok((exists, ver))
 }
 
 async fn get_release_db(url: &str) -> Result<model::ReleaseDatabase> {
   let target_url = format!("{}/index.json", url);
   log::debug!("target url: {}", target_url);
 
-  let resp = reqwest::get(target_url).await?;
+  let resp = reqwest::get(target_url).await?.error_for_status()?;
   let body = resp.text().await?;
   log::debug!("body len: {}", body.len());
 
-  let node_release_info: Vec<model::NodeReleaseInfo> =
-    serde_json::from_str(&body)?;
-  log::debug!("node_release_info count: {}", node_release_info.len());
+  let release_db: model::ReleaseDatabase = serde_json::from_str(&body)?;
+  log::debug!("node_release_info count: {}", release_db.len());
 
-  Ok(model::ReleaseDatabase::build(node_release_info))
+  Ok(release_db)
 }
 
 async fn download_version<T>(url: &str, dest: T) -> Result<()>
 where
   T: AsRef<Path>,
 {
-  let resp = reqwest::get(url).await?;
+  let resp = reqwest::get(url).await?.error_for_status()?;
   let total = resp.content_length().unwrap_or(0);
   let mut stream = ProgressStream::new(resp.bytes_stream(), total);
 
@@ -617,17 +622,19 @@ where
 }
 
 async fn load_checksum(url: &str, version: &str, arch: &str) -> Result<String> {
-  let resp = reqwest::get(url).await?;
+  let resp = reqwest::get(url).await?.error_for_status()?;
   let body = resp.text().await?;
   log::debug!("body len: {}", body.len());
 
   let package_name = format!("node-{}-win-{}.zip", version, arch);
   for line in body.lines() {
-    if line.contains(&package_name) {
-      let mut parts = line.split_ascii_whitespace();
-      if let Some(checksum) = parts.next() {
-        return Ok(checksum.to_string());
-      }
+    // SHASUMS256.txt: "<64位哈希>  node-vX.Y.Z-win-x64.zip"
+    let mut parts = line.split_ascii_whitespace();
+    let (Some(checksum), Some(name)) = (parts.next(), parts.next()) else {
+      continue;
+    };
+    if name == package_name {
+      return Ok(checksum.to_string());
     }
   }
 
@@ -681,18 +688,16 @@ where
 {
   let dest_dir = dest.as_ref();
 
-  // ✅ 防止 Zip Slip
+  // 防止 Zip Slip：解压后的路径必须仍在目标目录内
   let out_path = dest_dir.join(entry.mangled_name());
   if !out_path.starts_with(dest_dir) {
-    anyhow::bail!("非法路径: {}", entry.name());
+    bail!("illegal path in archive: {}", entry.name());
   }
 
   if entry.is_dir() {
     std::fs::create_dir_all(&out_path)?;
-  } else {
-    if let Some(parent) = out_path.parent() {
-      std::fs::create_dir_all(parent)?;
-    }
+  } else if let Some(parent) = out_path.parent() {
+    std::fs::create_dir_all(parent)?;
     let mut outfile = std::fs::File::create(&out_path)?;
     std::io::copy(&mut entry.take(100 * 1024 * 1024), &mut outfile)?; // 限制100MB
   }
@@ -717,54 +722,30 @@ where
   Ok(())
 }
 
-fn get_arch(arch: &Option<ArchSpec>) -> String {
-  if let Some(a) = arch {
-    if *a == ArchSpec::X64 {
-      "x64".to_string()
-    } else {
-      "x86".to_string()
-    }
-  } else {
+fn get_arch(arch: &Option<ArchSpec>) -> &'static str {
+  match arch {
+    Some(ArchSpec::X64) => "x64",
+    Some(ArchSpec::X86) => "x86",
     // todo: 没有考虑 arm 架构
-    if get_processor_architecture().ends_with("64") {
-      "x64".to_string()
-    } else {
-      "x86".to_string()
-    }
+    None if get_processor_architecture().ends_with("64") => "x64",
+    None => "x86",
   }
 }
 
-fn get_root(config: &model::Config) -> PathBuf {
-  config.root.clone().unwrap_or(PathBuf::from(
-    env::current_dir().unwrap().to_string_lossy().to_string(),
-  ))
+fn get_root(config: &model::Config) -> Result<PathBuf> {
+  Ok(match &config.root {
+    Some(root) => root.clone(),
+    None => env::current_dir()?,
+  })
 }
 
 fn get_node_mirror(config: &model::Config) -> String {
   config
     .node_mirror
     .clone()
-    .unwrap_or("https://nodejs.org/dist".to_string())
+    .unwrap_or_else(|| "https://nodejs.org/dist".to_string())
 }
 
-fn get_npm_mirror(config: &model::Config) -> String {
-  config
-    .npm_mirror
-    .clone()
-    .unwrap_or("https://registry.npmjs.org".to_string())
-}
-
-fn get_nvm_symlink() -> Result<String> {
-  let key = env::var("NVM_SYMLINK")?;
-  // let meta = fs::symlink_metadata(&key)?;
-
-  // log::debug!(
-  //   "link is symlink: {:?}",
-  //   meta.is_symlink()
-  // );
-  // if !meta.is_symlink() {
-  //   bail!("{:?} is not a symlink", key);
-  // }
-
-  Ok(key)
+fn get_nvm_symlink() -> Result<PathBuf> {
+  Ok(env::var("NVM_SYMLINK")?.into())
 }
