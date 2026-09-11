@@ -1,10 +1,10 @@
 use clap::Parser;
 use nvm_rs::model::{CliArgs, Commands, Config};
 use nvm_rs::{
-  Result, activate_version, display_current, display_or_update_node_mirror,
-  display_or_update_npm_mirror, display_or_update_proxy,
-  display_or_update_root, install_version, list_versions, switch_version,
-  uninstall_version,
+  Result, activate_version, deactivate_version, display_architecture,
+  display_current, display_or_update_node_mirror, display_or_update_npm_mirror,
+  display_or_update_proxy, display_or_update_root, install_version,
+  list_versions, switch_version, uninstall_version,
 };
 
 #[cfg(feature = "debug")]
@@ -30,9 +30,9 @@ fn main() -> Result<()> {
     Commands::Uninstall { version } => uninstall_version(config, version)?,
     Commands::List { available } => list_versions(config, available)?,
     Commands::On => activate_version(config)?,
-    Commands::Off => todo!("deactivate_version"),
+    Commands::Off => deactivate_version()?,
     Commands::Root { path } => display_or_update_root(config, path)?,
-    Commands::Arch => todo!("get_architecture"),
+    Commands::Arch => display_architecture(config)?,
     Commands::Proxy { url } => display_or_update_proxy(config, url)?,
     Commands::Current => display_current()?,
     Commands::NodeMirror { url } => display_or_update_node_mirror(config, url)?,

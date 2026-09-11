@@ -315,8 +315,47 @@ pub fn display_or_update_npm_mirror(
   Ok(())
 }
 
-pub fn activate_version(_config: Config) -> Result<()> {
-  todo!("activate_version");
+pub fn activate_version(config: Config) -> Result<()> {
+  let symlink = get_nvm_symlink()?;
+  if let Ok(metadata) = fs::symlink_metadata(&symlink) {
+    if metadata.is_symlink() {
+      bail!("node is already activated");
+    }
+  }
+
+  let root = get_root(&config)?;
+  let versions = get_local_versions(&root)?;
+  let Some(last) = versions.last() else {
+    bail!("no node version installed");
+  };
+
+  create_junction_link(symlink, root.join(last))?;
+
+  println!("node is activated.");
+
+  Ok(())
+}
+
+pub fn deactivate_version() -> Result<()> {
+  let symlink = get_nvm_symlink()?;
+  let Ok(_) = fs::symlink_metadata(&symlink) else {
+    bail!("node is already deactivated");
+  };
+
+  delete_junction_link(symlink)?;
+
+  println!("node is deactivated.");
+
+  Ok(())
+}
+
+pub fn display_architecture(config: Config) -> Result<()> {
+  let arch = get_arch(&config.arch);
+  println!("current arch is {}", arch);
+
+  tips(arch);
+
+  Ok(())
 }
 
 pub fn uninstall_version(config: Config, version: VersionSpec) -> Result<()> {
@@ -370,6 +409,10 @@ where
   Ok(())
 }
 
+/// 创建符号链接
+/// # Params
+/// * `link` - 符号路径, 例如 c:\\program files\\nodejs
+/// * `target` - 目标路径, 例如 d:\\nodejs_root\\v18.16.0
 fn create_junction_link<T, L>(link: T, target: L) -> Result<()>
 where
   T: AsRef<Path>,
@@ -384,6 +427,10 @@ where
   Ok(())
 }
 
+/// 重置符号链接
+/// # Params
+/// * `link` - 符号路径, 例如 c:\\program files\\nodejs
+/// * `target` - 目标路径, 例如 d:\\nodejs_root\\v18.16.0
 fn reset_junction_link<T, L>(link: T, target: L) -> Result<()>
 where
   T: AsRef<Path>,
@@ -395,6 +442,12 @@ where
   Ok(())
 }
 
+/// 提示<br>
+/// 如果使用的是 32 位版本, 则提示用户使用 64 位版本
+/// # Params
+/// * `arch` - 架构, 例如 x64, x86
+/// # Returns
+/// * `()`
 fn tips(arch: &str) {
   if arch != "x64" {
     println!(
