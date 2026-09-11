@@ -9,6 +9,7 @@ use anyhow::bail;
 use comfy_table::{Cell, CellAlignment, Table, presets};
 use indicatif::{ProgressBar, ProgressStyle};
 use path_clean::PathClean;
+use regex::Regex;
 use url::Url;
 use zip::ZipArchive;
 
@@ -163,6 +164,7 @@ where
   T: AsRef<Path>,
 {
   let mut versions = Vec::new();
+  let re = Regex::new(r"v\d+\.\d+\.\d+").unwrap();
 
   for entry in fs::read_dir(root.as_ref())? {
     let entry = entry?;
@@ -170,11 +172,12 @@ where
       continue;
     }
 
-    match entry.file_name().to_str() {
-      Some(name) => versions.push(name.to_string()),
-      None => {
-        log::debug!("skipping non-UTF8 directory entry: {:?}", entry.path())
-      }
+    if let Some(name) = entry.file_name().to_str()
+      && re.is_match(name)
+    {
+      versions.push(name.to_string());
+    } else {
+      log::debug!("skipping invalid directory entry: {:?}", entry.path());
     }
   }
 
@@ -317,10 +320,10 @@ pub fn display_or_update_npm_mirror(
 
 pub fn activate_version(config: Config) -> Result<()> {
   let symlink = get_nvm_symlink()?;
-  if let Ok(metadata) = fs::symlink_metadata(&symlink) {
-    if metadata.is_symlink() {
-      bail!("node is already activated");
-    }
+  if let Ok(metadata) = fs::symlink_metadata(&symlink)
+    && metadata.is_symlink()
+  {
+    bail!("node is already activated");
   }
 
   let root = get_root(&config)?;
@@ -370,7 +373,7 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result<()> {
       );
     }
     VersionSpec::Exact(ver) => {
-      let ver = format!("v{}", ver);
+      // let ver = format!("v{}", ver);
       if !versions.contains(&ver) {
         bail!("version {:?} not installed", ver);
       }
@@ -451,7 +454,7 @@ where
 fn tips(arch: &str) {
   if arch != "x64" {
     println!(
-      "\n* Notice: Starting from version v23.0.0, 32-bit version are no longer available. Please use the 64-bit version."
+      "\n* Notice: Since version v23.0.0, 32-bit versions are no longer available. Please use the 64-bit version."
     );
   }
 }
@@ -504,9 +507,10 @@ where
         bail!("No LTS version found.")
       }
     }
+    // todo: 修改为 v1.1.0 格式, 而不是 1.1.0
     VersionSpec::Exact(s) => {
       if db.version_exists(s) {
-        s.to_string()
+        s.clone()
       } else {
         bail!("node v{} not installed.", s)
       }
@@ -742,9 +746,15 @@ pub fn switch_version(
 
   let db = get_release_db(&base_url)?;
   let (exists, ver) = version_exists(&db, &version, &root)?;
+  let (current_ver, _) = get_current_version_and_arch();
   if !exists {
     bail!("version {:?} not installed", ver);
   }
+  if current_ver == ver {
+    bail!("version {:?} is already used", ver);
+  }
+
+  tips(arch);
 
   log::debug!("ready switch to {:?}({})", version, arch);
 

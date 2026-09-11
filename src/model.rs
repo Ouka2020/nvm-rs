@@ -33,7 +33,7 @@ impl std::str::FromStr for VersionSpec {
     match s.to_lowercase().as_str() {
       "lts" => Ok(Self::Lts),
       "latest" => Ok(Self::Latest),
-      v => Ok(Self::Exact(v.to_string())),
+      v => Ok(Self::Exact(format!("v{}", v))),
     }
   }
 }
@@ -61,10 +61,10 @@ pub enum Commands {
     /// The version to uninstall.
     version: VersionSpec,
   },
-  /// List the node.js installations. Type "available" at the end to see what can be installed.
+  /// List the node.js installations.
   #[command(visible_alias = "ls")]
   List {
-    /// Show available versions.
+    /// Show online available versions.
     #[arg(short, long, default_value_t = false)]
     available: bool,
   },
@@ -304,6 +304,8 @@ pub struct Config {
   pub originalpath: Option<PathBuf>,
   pub originalversion: Option<String>,
   // pub symlink: Option<String>,
+  #[serde(skip)]
+  inner: PathBuf,
 }
 
 fn deserialize_proxy<'de, D>(
@@ -385,30 +387,49 @@ impl Config {
 fn read_from_toml() -> Option<Config> {
   use std::fs;
 
-  let path_str = format!("{}.toml", CONFIG_FILE_NAME);
-  let data = fs::read_to_string(&path_str).ok()?;
-  match toml::from_str(&data) {
-    Ok(config) => Some(config),
-    Err(e) => {
-      log::warn!("failed to parse {path_str}: {e}");
-      None
-    }
-  }
+  let Ok(current_dir) = get_exec_path() else {
+    log::warn!("failed to get current exe path");
+    return None;
+  };
+
+  let path = current_dir.join(CONFIG_FILE_NAME);
+  let Ok(data) = fs::read_to_string(&path) else {
+    log::warn!("failed to read {}", path.display());
+    return None;
+  };
+
+  let Ok(config) = toml::from_str::<Config>(&data) else {
+    log::warn!("failed to parse {path}: {e}");
+    return None;
+  };
+
+  config.inner = current_dir.to_path_buf();
+
+  Some(config)
 }
 
 #[cfg(feature = "yaml")]
 fn read_from_txt() -> Option<Config> {
   use std::fs;
 
-  let path_str = format!("{}.txt", CONFIG_FILE_NAME);
-  let data = fs::read_to_string(&path_str).ok()?;
-  match noyalib::from_str(&data) {
-    Ok(config) => Some(config),
-    Err(e) => {
-      log::warn!("failed to parse {path_str}: {e}");
-      None
-    }
-  }
+  let Ok(current_dir) = get_exec_path() else {
+    log::warn!("failed to get current exe path");
+    return None;
+  };
+
+  let path = current_dir.join(CONFIG_FILE_NAME).with_extension("txt");
+  let Ok(data) = fs::read_to_string(&path) else {
+    log::warn!("failed to read {}", path.display());
+    return None;
+  };
+  let Ok(mut config) = noyalib::from_str::<Config>(&data) else {
+    log::warn!("failed to parse {}:", path.display());
+    return None;
+  };
+
+  config.inner = current_dir.to_path_buf();
+
+  Some(config)
 }
 
 #[cfg(feature = "toml")]
@@ -437,4 +458,18 @@ fn write_to_txt(config: &Config) -> Result {
   };
   fs::write(&path_str, config_str)?;
   Ok(())
+}
+
+fn get_exec_path() -> Result<PathBuf> {
+  use std::env;
+
+  let Ok(exe_path) = env::current_exe() else {
+    bail!("failed to get current exe path");
+  };
+
+  let Some(current_dir) = exe_path.parent() else {
+    bail!("failed to get current exe path");
+  };
+
+  Ok(current_dir.to_path_buf())
 }
