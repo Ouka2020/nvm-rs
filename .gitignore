@@ -27,3 +27,5 @@ rustc-ice-*.txt
 
 settings.txt
 settings.toml
+
+github.token.txt
