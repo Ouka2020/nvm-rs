@@ -3,7 +3,7 @@
   default-run = "nvm"
   description = "A tool to manage Node.js versions."
   edition     = "2024"
-  exclude     = [ "*.txt", ".github/", "logs/", "settings.*" ]
+  exclude     = [ "*.txt", ".github/", "dist-workspace.toml", "logs/", "manifest.xml", "settings.*" ]
   license     = "MIT"
   name        = "nvm-rs"
   repository  = "https://github.com/Ouka2020/nvm-rs"
