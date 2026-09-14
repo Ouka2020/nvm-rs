@@ -20,4 +20,4 @@
 
   [[dist.extra-artifacts]]
     artifacts = [ "SHA256SUMS" ]
-    build     = [ "sh -c 'cat target/distrib/sha256.sum > target/distrib/SHA256SUMS'" ]
+    build     = [ "cwd && cat target/distrib/sha256.sum > target/distrib/SHA256SUMS" ]
