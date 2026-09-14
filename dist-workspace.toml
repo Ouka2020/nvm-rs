@@ -4,7 +4,8 @@
 # Config for 'dist'
 [dist]
   create-release = false
-  hidden-assets  = [ "*.tar.gz", "*.tar.gz.sha256", "dist-manifest.json", "sha256.sum" ]
+  hidden-assets  = [ "dist-manifest.json", "sha256.sum" ]
+  source-tarball = false
   # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
   cargo-dist-version = "0.32.0"
   # CI backends to support
@@ -20,4 +21,4 @@
 
   [[dist.extra-artifacts]]
     artifacts = [ "SHA256SUMS" ]
-    build     = [ "cwd && cat target/distrib/sha256.sum > target/distrib/SHA256SUMS" ]
+    build     = [ "cwd && cp sha256.sum SHA256SUMS" ]
