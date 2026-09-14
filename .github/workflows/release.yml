@@ -42,7 +42,7 @@ on:
   pull_request:
   push:
     tags:
-      - '**[0-9]+.[0-9]+.[0-9]+*'
+      - "**[0-9]+.[0-9]+.[0-9]+*"
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
@@ -57,9 +57,6 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: recursive
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -226,9 +223,6 @@ jobs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: recursive
       - name: Install cached dist
         uses: actions/download-artifact@v8
         with:
@@ -291,6 +285,3 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: recursive
