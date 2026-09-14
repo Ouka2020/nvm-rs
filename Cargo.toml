@@ -1,63 +1,72 @@
 [package]
-default-run = "nvm"
-edition     = "2024"
-name        = "nvm-rs"
-version     = "0.1.0"
+  default-run = "nvm"
+  edition     = "2024"
+  name        = "nvm-rs"
+  repository  = "https://github.com/Ouka2020/nvm-rs"
+  version     = "0.1.0"
 
 [[bin]]
-name = "nvm"
-path = "src/main.rs"
+  name = "nvm"
+  path = "src/main.rs"
 
-[package.metadata.winresource]
-# OriginalFilename = "PROGRAM.EXE"
-LegalCopyright = "Copyright © 2026"
-# FileDescription = "ExVS Runner"
-# ProductName = "ExVS Runner sss"
+[[bin]]
+  name = "preview"
+  path = "src/bin/d.rs"
+
+  [package.metadata.winresource]
+    # OriginalFilename = "PROGRAM.EXE"
+    LegalCopyright = "Copyright © 2026"
+    # FileDescription = "ExVS Runner"
+    # ProductName = "ExVS Runner sss"
 
 [build-dependencies]
-winresource = "0"
+  winresource = "0"
 
 [dependencies]
-anyhow = "1"
-bytes = "1"
-clap = { version = "4", features = ["derive"] }
-comfy-table = "8"
-futures-util = "0"
-hex = "0"
-indicatif = "0"
-jiff = { version = "0", features = ["serde"] }
-junction = "2"
-log = "0"
-noyalib = { version = "0", optional = true }
-path-clean = "1"
-reqwest = { version = "0", features = ["default-tls", "stream"] }
-semver = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_repr = "0"
-serde_with = "3"
-sha2 = "0"
-strum = { version = "0", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
-toml = { version = "1", optional = true }
-tracing = { version = "0", optional = true }
-tracing-appender = { version = "0", optional = true }
-tracing-subscriber = { version = "0", features = [
-  "env-filter"
-], optional = true }
-winreg = { version = "0", optional = true }
-zip = "8"
+  anyhow             = "1"
+  bytes              = "1"
+  clap               = { version = "4", features = [ "derive" ] }
+  comfy-table        = "8"
+  derive_more        = { version = "2", features = [ "full" ] }
+  hex                = "0"
+  indicatif          = "0"
+  junction           = "2"
+  log                = "0"
+  noyalib            = { version = "0", optional = true }
+  path-clean         = "1"
+  regex              = "1"
+  serde              = { version = "1", features = [ "derive" ] }
+  serde_json         = "1"
+  serde_repr         = "0"
+  serde_with         = "3"
+  sha2               = "0"
+  strum              = { version = "0", features = [ "derive" ] }
+  tokio              = { version = "1", features = [ "full" ] }
+  toml               = { version = "1", optional = true }
+  tracing            = { version = "0", optional = true }
+  tracing-appender   = { version = "0", optional = true }
+  tracing-subscriber = { version = "0", features = [ "env-filter" ], optional = true }
+  ureq               = { version = "3", optional = true, features = [ "json" ] }
+  url                = { version = "2", features = [ "serde" ] }
+  winreg             = { version = "0", optional = true }
+  zip                = "8"
 
 [features]
-debug   = ["dep:tracing", "dep:tracing-appender", "dep:tracing-subscriber"]
-default = ["debug", "yaml"]
-toml    = ["dep:toml"]
-winreg  = ["dep:winreg"]
-yaml    = ["dep:noyalib"]
+  debug   = [ "dep:tracing", "dep:tracing-appender", "dep:tracing-subscriber" ]
+  default = [ "ureq", "yaml" ]
+  toml    = [ "dep:toml" ]
+  ureq    = [ "dep:ureq" ]
+  winreg  = [ "dep:winreg" ]
+  yaml    = [ "dep:noyalib" ]
 
 [profile.release]
-codegen-units = 1       # 允许 LLVM 执行更好的优化。
-lto           = true    # 启用链接时优化。
-opt-level     = "s"     # 优先考虑小的二进制文件大小。如果您更喜欢速度，请使用 `3`。
-panic         = "abort" # 通过禁用 panic 处理程序来提高性能。
-strip         = true    # 确保移除调试符号。
+  codegen-units = 1 # 允许 LLVM 执行更好的优化。
+  lto           = true # 启用链接时优化。
+  opt-level     = "s" # 优先考虑小的二进制文件大小。如果您更喜欢速度，请使用 `3`。
+  panic         = "abort" # 通过禁用 panic 处理程序来提高性能。
+  strip         = true # 确保移除调试符号。
+
+# The profile that 'dist' will build with
+[profile.dist]
+  inherits = "release"
+  lto      = "thin"

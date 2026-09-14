@@ -1,12 +1,12 @@
 use super::Result;
 use anyhow::bail;
-use clap::ValueEnum;
-use jiff::civil::Date;
+use derive_more::Deref;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use strum::Display;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -22,7 +22,7 @@ pub enum VersionSpec {
   /// Latest version
   Latest,
   /// Exact semver version number.(eg: 1.1.0)
-  Exact(semver::Version),
+  Exact(String),
 }
 
 // Clap 通过 FromStr 自动将其作为 value_parser
@@ -33,11 +33,7 @@ impl std::str::FromStr for VersionSpec {
     match s.to_lowercase().as_str() {
       "lts" => Ok(Self::Lts),
       "latest" => Ok(Self::Latest),
-      v => semver::Version::parse(v).map(Self::Exact).map_err(|_| {
-        format!(
-          "'{s}' invalid. Possible values: <semver>(eg: 1.1.0), lts, latest."
-        )
-      }),
+      v => Ok(Self::Exact(format!("v{}", v))),
     }
   }
 }
@@ -65,10 +61,10 @@ pub enum Commands {
     /// The version to uninstall.
     version: VersionSpec,
   },
-  /// List the node.js installations. Type "available" at the end to see what can be installed.
+  /// List the node.js installations.
   #[command(visible_alias = "ls")]
   List {
-    /// Show available versions.
+    /// Show online available versions.
     #[arg(short, long, default_value_t = false)]
     available: bool,
   },
@@ -130,6 +126,8 @@ pub enum ArchSpec {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+// 字段负载仅用于反序列化时区分变体，业务上只判断变体形状
+#[allow(dead_code)]
 pub enum LtsSpec {
   Codename(String),
   NotLts(bool), // 只接受 false；如果 JSON 里出现 true 也会匹配进来
@@ -142,9 +140,10 @@ pub struct NodeReleaseInfo {
   pub version: String,
 
   /// 发布日期，格式 YYYY-MM-DD
-  #[serde(deserialize_with = "deserialize_jiff_date")]
+  // #[serde(deserialize_with = "deserialize_jiff_date")]
+  #[allow(dead_code)]
   // #[tabled(skip)]
-  pub date: Date,
+  pub date: String,
 
   // /// 可用的构建产物/平台列表
   // #[tabled(skip)]
@@ -184,86 +183,27 @@ pub struct NodeReleaseInfo {
   // pub security: bool,
 }
 
-/// 自定义反序列化函数：将 "YYYY-MM-DD" 字符串解析为 jiff::civil::Date
-fn deserialize_jiff_date<'de, D>(
-  deserializer: D,
-) -> core::result::Result<Date, D::Error>
-where
-  D: Deserializer<'de>,
-{
-  let s = String::deserialize(deserializer)?;
-  // jiff 的 Date 原生支持 ISO 8601 日期格式解析，无需指定格式化字符串
-  s.parse::<Date>().map_err(serde::de::Error::custom)
-}
-
-use std::{
-  collections::{BTreeMap, HashMap},
-  path::PathBuf,
-};
-
 /// 核心查询缓存（启动时构建一次）
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Deref)]
+#[serde(transparent)]
 pub struct ReleaseDatabase {
-  /// 按版本号降序排列的完整列表（最新版 = index[0]）
-  sorted_releases: Vec<NodeReleaseInfo>,
-
-  /// LTS 版本子集引用（避免重复过滤）
-  lts_indices: Vec<usize>,
-
-  /// 按主版本号分组索引，如 "v26" -> [0, 1, 2]
-  major_version_map: BTreeMap<u64, Vec<usize>>,
-
-  /// 精确版本号 → 索引位置 O(1) 点查
-  version_lookup: HashMap<String, usize>,
+  #[deref]
+  inner: Vec<NodeReleaseInfo>,
 }
 
 impl ReleaseDatabase {
-  /// 启动时调用一次，O(n log n) 构建
-  pub fn build(mut releases: Vec<NodeReleaseInfo>) -> Self {
-    // 1. 按版本号降序排序（语义化版本比较）
-    releases.sort_by(|a, b| {
-      semver::Version::parse(b.version.trim_start_matches('v'))
-        .unwrap()
-        .cmp(
-          &semver::Version::parse(a.version.trim_start_matches('v')).unwrap(),
-        )
-    });
-
-    // 2. 构建辅助索引
-    let mut lts_indices = Vec::new();
-    let mut major_version_map: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
-    let mut version_lookup = HashMap::with_capacity(releases.len());
-
-    for (idx, release) in releases.iter().enumerate() {
-      if let LtsSpec::Codename(_) = &release.lts {
-        lts_indices.push(idx);
-      }
-      let major =
-        semver::Version::parse(release.version.trim_start_matches('v'))
-          .unwrap()
-          .major;
-      major_version_map.entry(major).or_default().push(idx);
-      version_lookup.insert(release.version.clone(), idx);
-    }
-
-    Self {
-      sorted_releases: releases,
-      lts_indices,
-      major_version_map,
-      version_lookup,
-    }
+  /// ✅ 获取最新版本
+  pub fn latest(&self) -> Option<String> {
+    self.inner.first().map(|f| f.version.clone())
   }
 
-  // ========== 查询接口 ==========
-
-  /// ✅ 获取最新版本 → O(1)
-  pub fn latest(&self) -> Option<&NodeReleaseInfo> {
-    self.sorted_releases.first()
-  }
-
-  /// ✅ 获取最新 LTS 版本 → O(1)
-  pub fn latest_lts(&self) -> Option<&NodeReleaseInfo> {
-    self.lts_indices.first().map(|&i| &self.sorted_releases[i])
+  /// ✅ 获取最新 LTS 版本
+  pub fn latest_lts(&self) -> Option<String> {
+    self
+      .inner
+      .iter()
+      .find(|r| matches!(r.lts, LtsSpec::Codename(_)))
+      .map(|r| r.version.clone())
   }
 
   // /// ✅ 按条件组合查询（示例：最新 LTS + 指定平台）
@@ -278,57 +218,74 @@ impl ReleaseDatabase {
   //     .find(|r| r.files.iter().any(|f| f == platform))
   // }
 
-  /// ✅ 精确版本查询 → O(1)
-  pub fn get_by_version(&self, version: &str) -> Option<&NodeReleaseInfo> {
-    log::debug!("get_by_version: {:?}", version);
+  /// 版本查询
+  pub fn version_exists(&self, version: &str) -> bool {
+    log::debug!("version_exists: {:?}", version);
 
     let version = if version.starts_with('v') {
       version.to_string()
     } else {
       format!("v{}", version)
     };
-    self
-      .version_lookup
-      .get(&version)
-      .map(|&i| &self.sorted_releases[i])
+
+    self.inner.iter().any(|f| f.version == version)
   }
 
-  // /// ✅ 获取某主版本下所有发布 → O(log n + k)
-  // pub fn by_major(&self, major: u64) -> impl Iterator<Item = &NodeReleaseInfo> {
-  //   self
-  //     .major_version_map
-  //     .get(&major)
-  //     .into_iter()
-  //     .flat_map(move |indices| {
-  //       indices.iter().map(move |&i| &self.sorted_releases[i])
-  //     })
-  // }
+  /// 获取某主版本下所有发布
+  pub fn by_major(&self, major: u64, len: usize) -> Vec<String> {
+    let major = format!("v{}", major);
 
-  /// ✅ 获取最新的 N 个版本 → O(1) 切片，零拷贝
-  pub fn latest_list(&self, n: usize) -> &[NodeReleaseInfo] {
-    let end = n.min(self.sorted_releases.len());
-    &self.sorted_releases[..end]
-  }
-
-  // /// ✅ 获取所有 LTS 版本（已按版本降序排列）→ O(1) 间接引用
-  // pub fn lts_releases(&self) -> impl Iterator<Item = &NodeReleaseInfo> {
-  //   self
-  //     .lts_indices
-  //     .iter()
-  //     .map(move |&i| &self.sorted_releases[i])
-  // }
-
-  /// ✅ 组合查询：最新10个版本中的 LTS 版本
-  pub fn lts_list(&self, n: usize) -> Vec<&NodeReleaseInfo> {
-    self
-      .lts_indices
+    let list: Vec<_> = self
+      .inner
       .iter()
-      .take(n)
-      .map(|&i| &self.sorted_releases[i])
-      .collect()
+      .filter(|f| f.version.starts_with(&major))
+      .map(|f| f.version.clone())
+      .collect();
+
+    fill_len(list, len)
+  }
+
+  /// 最新的 N 个版本
+  pub fn latest_list(&self, count: usize) -> Vec<String> {
+    let list: Vec<_> = self
+      .inner
+      .iter()
+      .filter(|r| matches!(r.lts, LtsSpec::NotLts(false)))
+      .take(count)
+      .map(|r| r.version.clone())
+      .collect();
+
+    fill_len(list, count)
+  }
+
+  /// 最新 n 个 LTS 版本
+  pub fn lts_list(&self, count: usize) -> Vec<String> {
+    let list: Vec<_> = self
+      .inner
+      .iter()
+      .filter(|r| matches!(r.lts, LtsSpec::Codename(_)))
+      .take(count)
+      .map(|r| r.version.clone())
+      .collect();
+
+    fill_len(list, count)
   }
 }
 
+fn fill_len<T>(mut list: Vec<T>, len: usize) -> Vec<T>
+where
+  T: Default,
+{
+  if list.len() < len {
+    for _ in 0..(len - list.len()) {
+      list.push(T::default());
+    }
+  }
+
+  list
+}
+
+#[cfg(any(feature = "toml", feature = "yaml"))]
 const CONFIG_FILE_NAME: &str = "settings";
 
 #[serde_with::skip_serializing_none]
@@ -347,6 +304,8 @@ pub struct Config {
   pub originalpath: Option<PathBuf>,
   pub originalversion: Option<String>,
   // pub symlink: Option<String>,
+  #[serde(skip)]
+  inner: PathBuf,
 }
 
 fn deserialize_proxy<'de, D>(
@@ -357,8 +316,8 @@ where
 {
   let s = String::deserialize(deserializer)?;
   if s.is_empty()
-    || s.to_ascii_lowercase() == "null"
-    || s.to_ascii_lowercase() == "none"
+    || s.eq_ignore_ascii_case("null")
+    || s.eq_ignore_ascii_case("none")
   {
     return Ok(None);
   }
@@ -391,34 +350,33 @@ impl Config {
     Config::default()
   }
 
-  pub fn save(&self) {
+  pub fn save(&self) -> Result {
     log::debug!("save config");
 
+    // toml 优先；仅在未启用 toml 时才使用 txt，与 load() 的优先级保持一致
     #[cfg(feature = "toml")]
-    {
-      write_to_toml(self);
-      return;
-    }
+    let result = write_to_toml(self);
 
-    #[cfg(feature = "yaml")]
-    {
-      write_to_txt(self);
-    }
+    #[cfg(all(not(feature = "toml"), feature = "yaml"))]
+    let result = write_to_txt(self);
+
+    #[cfg(all(not(feature = "toml"), not(feature = "yaml")))]
+    let result: Result = Ok(());
+
+    result
   }
 
   pub fn is_valid(&self) -> Result {
-    if self.root.is_some() {
-      let root = self.root.as_ref().unwrap();
-      if !root.is_dir() {
-        bail!("root is not a directory");
-      }
+    if let Some(root) = &self.root
+      && !root.is_dir()
+    {
+      bail!("root is not a directory");
     }
 
-    if self.originalpath.is_some() {
-      let originalpath = self.originalpath.as_ref().unwrap();
-      if !originalpath.is_dir() {
-        bail!("originalpath is not a directory");
-      }
+    if let Some(originalpath) = &self.originalpath
+      && !originalpath.is_dir()
+    {
+      bail!("originalpath is not a directory");
     }
 
     Ok(())
@@ -429,56 +387,89 @@ impl Config {
 fn read_from_toml() -> Option<Config> {
   use std::fs;
 
-  let path_str = format!("{}.toml", CONFIG_FILE_NAME);
-  if let Ok(v) = fs::exists(&path_str)
-    && v == true
-  {
-    let data = fs::read_to_string(&path_str).unwrap();
-    let config: Config = toml::from_str(&data).unwrap();
-    return Some(config);
-  }
-  None
+  let Ok(current_dir) = get_exec_path() else {
+    log::warn!("failed to get current exe path");
+    return None;
+  };
+
+  let path = current_dir.join(CONFIG_FILE_NAME);
+  let Ok(data) = fs::read_to_string(&path) else {
+    log::warn!("failed to read {}", path.display());
+    return None;
+  };
+
+  let Ok(config) = toml::from_str::<Config>(&data) else {
+    log::warn!("failed to parse {path}: {e}");
+    return None;
+  };
+
+  config.inner = current_dir.to_path_buf();
+
+  Some(config)
 }
 
 #[cfg(feature = "yaml")]
 fn read_from_txt() -> Option<Config> {
   use std::fs;
 
-  let path_str = format!("{}.txt", CONFIG_FILE_NAME);
-  if let Ok(v) = fs::exists(&path_str)
-    && v == true
-  {
-    let data = fs::read_to_string(&path_str).unwrap();
-    let config: Config = noyalib::from_str(&data).unwrap();
+  let Ok(current_dir) = get_exec_path() else {
+    log::warn!("failed to get current exe path");
+    return None;
+  };
 
-    return Some(config);
-  }
+  let path = current_dir.join(CONFIG_FILE_NAME).with_extension("txt");
+  let Ok(data) = fs::read_to_string(&path) else {
+    log::warn!("failed to read {}", path.display());
+    return None;
+  };
+  let Ok(mut config) = noyalib::from_str::<Config>(&data) else {
+    log::warn!("failed to parse {}:", path.display());
+    return None;
+  };
 
-  None
+  config.inner = current_dir.to_path_buf();
+
+  Some(config)
 }
 
 #[cfg(feature = "toml")]
-fn write_to_toml(config: &Config) {
+fn write_to_toml(config: &Config) -> Result {
   use std::fs;
 
-  let config_str = toml::to_string(config).unwrap();
+  let config_str = toml::to_string(config)?;
   let path_str = if cfg!(debug_assertions) {
     format!("{}.toml.toml", CONFIG_FILE_NAME)
   } else {
     format!("{}.toml", CONFIG_FILE_NAME)
   };
-  fs::write(&path_str, config_str).unwrap();
+  fs::write(&path_str, config_str)?;
+  Ok(())
 }
 
 #[cfg(feature = "yaml")]
-fn write_to_txt(config: &Config) {
+fn write_to_txt(config: &Config) -> Result {
   use std::fs;
 
-  let config_str = noyalib::to_string(config).unwrap();
+  let config_str = noyalib::to_string(config)?;
   let path_str = if cfg!(debug_assertions) {
     format!("{}.txt.txt", CONFIG_FILE_NAME)
   } else {
     format!("{}.txt", CONFIG_FILE_NAME)
   };
-  fs::write(&path_str, config_str).unwrap();
+  fs::write(&path_str, config_str)?;
+  Ok(())
+}
+
+fn get_exec_path() -> Result<PathBuf> {
+  use std::env;
+
+  let Ok(exe_path) = env::current_exe() else {
+    bail!("failed to get current exe path");
+  };
+
+  let Some(current_dir) = exe_path.parent() else {
+    bail!("failed to get current exe path");
+  };
+
+  Ok(current_dir.to_path_buf())
 }
