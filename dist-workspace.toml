@@ -3,9 +3,8 @@
 
 # Config for 'dist'
 [dist]
-  create-release  = false
-  extra-artifacts = [ { path = "target/distrib/SHA256SUMS", command = "sh -c 'cat target/distrib/sha256.sum > target/distrib/SHA256SUMS'" } ]
-  hidden-assets   = [ "", "*-sha256.sum", "dist-manifest.json", "source.tar.gz", "source.tar.gz.sha256" ]
+  create-release = false
+  hidden-assets  = [ "*.tar.gz", "*.tar.gz.sha256", "dist-manifest.json", "sha256.sum" ]
   # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
   cargo-dist-version = "0.32.0"
   # CI backends to support
@@ -18,3 +17,7 @@
   install-path = "CARGO_HOME"
   # Whether to install an updater program
   install-updater = false
+
+  [[dist.extra-artifacts]]
+    artifacts = [ "SHA256SUMS" ]
+    build     = [ "sh -c 'cat target/distrib/sha256.sum > target/distrib/SHA256SUMS'" ]
