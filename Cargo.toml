@@ -1,5 +1,5 @@
 [package]
-  categories  = [ "development" ]
+  categories  = [ "command-line-utilities" ]
   default-run = "nvm"
   description = "A tool to manage Node.js versions."
   edition     = "2024"
