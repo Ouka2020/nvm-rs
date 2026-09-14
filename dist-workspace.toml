@@ -4,7 +4,7 @@ members = [ "cargo:." ]
 # Config for 'dist'
 [dist]
 create-release = false
-hidden-assets  = [ "dist-manifest.json", "sha256.sum" ]
+hidden-assets  = [ "dist-manifest.json" ]
 source-tarball = false
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.32.0"
@@ -18,7 +18,3 @@ targets = [ "x86_64-pc-windows-msvc" ]
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
-
-  [[dist.extra-artifacts]]
-  artifacts = [ "SHA256SUMS" ]
-  build     = [ "cp", "sha256.sum", "SHA256SUMS" ]
