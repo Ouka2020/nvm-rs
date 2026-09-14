@@ -1,6 +1,10 @@
 [package]
+  categories  = [ "development" ]
   default-run = "nvm"
+  description = "A tool to manage Node.js versions."
   edition     = "2024"
+  exclude     = [ "*.txt", ".github/", "logs/", "settings.*" ]
+  license     = "MIT"
   name        = "nvm-rs"
   repository  = "https://github.com/Ouka2020/nvm-rs"
   version     = "0.1.0"
@@ -8,10 +12,6 @@
 [[bin]]
   name = "nvm"
   path = "src/main.rs"
-
-[[bin]]
-  name = "preview"
-  path = "src/bin/d.rs"
 
   [package.metadata.winresource]
     # OriginalFilename = "PROGRAM.EXE"

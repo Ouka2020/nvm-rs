@@ -33,3 +33,4 @@ settings.toml
 
 >>>>>>> dev-dist
 github.token.txt
+crates-io.token.txt
