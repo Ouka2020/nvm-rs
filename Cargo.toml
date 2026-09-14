@@ -5,7 +5,7 @@
   edition     = "2024"
   exclude     = [ "*.txt", ".cargo/", ".github/", "dist-workspace.toml", "logs/", "manifest.xml", "settings.*" ]
   license     = "MIT"
-  name        = "nvm-rs"
+  name        = "nvm-windows"
   repository  = "https://github.com/Ouka2020/nvm-rs"
   version     = "0.1.0"
 

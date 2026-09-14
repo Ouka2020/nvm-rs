@@ -1,6 +1,6 @@
 use clap::Parser;
-use nvm_rs::model::{CliArgs, Commands, Config};
-use nvm_rs::{
+use nvm_windows::model::{CliArgs, Commands, Config};
+use nvm_windows::{
   Result, activate_version, deactivate_version, display_architecture,
   display_current, display_or_update_node_mirror, display_or_update_npm_mirror,
   display_or_update_proxy, display_or_update_root, install_version,
@@ -8,7 +8,7 @@ use nvm_rs::{
 };
 
 #[cfg(feature = "debug")]
-use nvm_rs::log_init;
+use nvm_windows::log_init;
 
 // #[tokio::main]
 fn main() -> Result<()> {

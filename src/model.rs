@@ -398,8 +398,8 @@ fn read_from_toml() -> Option<Config> {
     return None;
   };
 
-  let Ok(config) = toml::from_str::<Config>(&data) else {
-    log::warn!("failed to parse {path}: {e}");
+  let Ok(mut config) = toml::from_str::<Config>(&data) else {
+    log::warn!("failed to parse {}", path.display());
     return None;
   };
 
