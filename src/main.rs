@@ -10,14 +10,13 @@ use nvm_windows::{
 #[cfg(feature = "debug")]
 use nvm_windows::log_init;
 
-// #[tokio::main]
 fn main() -> Result<()> {
   #[cfg(feature = "debug")]
   log_init();
 
   let args = CliArgs::parse();
   log::debug!("args: {:?}", args);
-  let config = Config::load();
+  let config = Config::load()?;
   log::debug!("config: {:?}", config);
   config.is_valid()?;
 

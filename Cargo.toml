@@ -49,6 +49,11 @@ ureq               = { version = "3", optional = true, features = [ "json" ] }
 url                = { version = "2", features = [ "serde" ] }
 zip                = "8"
 
+[dev-dependencies]
+pretty_assertions = "1"
+rstest            = "0"
+# serial_test       = "4"
+
 [features]
 debug   = [ "dep:tracing", "dep:tracing-appender", "dep:tracing-subscriber" ]
 default = [ "ureq", "yaml" ]

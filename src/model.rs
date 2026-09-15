@@ -6,6 +6,8 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use strum::Display;
 
 use clap::{Parser, Subcommand, ValueEnum};
+#[cfg(feature = "yaml")]
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -330,24 +332,30 @@ impl Config {
   /// If both toml and yaml features are enabled, it will try to load from toml first.
   /// If toml is not enabled, it will try to load from yaml.
   /// If yaml is not enabled, it will return None.
-  pub fn load() -> Config {
+  pub fn load() -> Result<Config> {
     log::debug!("load config");
+
+    // // 从当前目录加载配置文件
+    // let current_dir = std::env::current_dir()?;
+    let Ok(current_dir) = get_exec_path() else {
+      bail!("failed to get current exe path");
+    };
 
     #[cfg(feature = "toml")]
     {
-      if let Some(config) = read_from_toml() {
-        return config;
+      if let Some(config) = read_from_toml(&current_dir) {
+        return Ok(config);
       }
     }
 
     #[cfg(feature = "yaml")]
     {
-      if let Some(config) = read_from_txt() {
-        return config;
+      if let Some(config) = read_from_txt(&current_dir) {
+        return Ok(config);
       }
     }
 
-    Config::default()
+    Ok(Config::default())
   }
 
   pub fn save(&self) -> Result {
@@ -384,52 +392,51 @@ impl Config {
 }
 
 #[cfg(feature = "toml")]
-fn read_from_toml() -> Option<Config> {
+fn read_from_toml<T>(current_dir: T) -> Option<Config>
+where
+  T: AsRef<Path>,
+{
   use std::fs;
 
-  let Ok(current_dir) = get_exec_path() else {
-    log::warn!("failed to get current exe path");
+  let path = current_dir.as_ref();
+  let file_path = path.join(CONFIG_FILE_NAME);
+  let Ok(data) = fs::read_to_string(&file_path) else {
+    log::warn!("failed to read {}", file_path.display());
     return None;
   };
 
-  let path = current_dir.join(CONFIG_FILE_NAME);
-  let Ok(data) = fs::read_to_string(&path) else {
-    log::warn!("failed to read {}", path.display());
+  let Ok(config) = toml::from_str::<Config>(&data) else {
+    log::warn!("failed to parse {}:", file_path.display());
     return None;
   };
 
-  let Ok(mut config) = toml::from_str::<Config>(&data) else {
-    log::warn!("failed to parse {}", path.display());
-    return None;
-  };
-
-  config.inner = current_dir.to_path_buf();
-
-  Some(config)
+  Some(config_inner_patch(config, path))
 }
 
 #[cfg(feature = "yaml")]
-fn read_from_txt() -> Option<Config> {
+fn read_from_txt<T>(current_dir: T) -> Option<Config>
+where
+  T: AsRef<Path>,
+{
   use std::fs;
 
-  let Ok(current_dir) = get_exec_path() else {
-    log::warn!("failed to get current exe path");
+  let path = current_dir.as_ref();
+  let file_path = path.join(CONFIG_FILE_NAME).with_extension("txt");
+  let Ok(data) = fs::read_to_string(&file_path) else {
+    log::warn!("failed to read {}", file_path.display());
+    return None;
+  };
+  let Ok(config) = noyalib::from_str::<Config>(&data) else {
+    log::warn!("failed to parse {}:", file_path.display());
     return None;
   };
 
-  let path = current_dir.join(CONFIG_FILE_NAME).with_extension("txt");
-  let Ok(data) = fs::read_to_string(&path) else {
-    log::warn!("failed to read {}", path.display());
-    return None;
-  };
-  let Ok(mut config) = noyalib::from_str::<Config>(&data) else {
-    log::warn!("failed to parse {}:", path.display());
-    return None;
-  };
+  Some(config_inner_patch(config, path))
+}
 
-  config.inner = current_dir.to_path_buf();
-
-  Some(config)
+fn config_inner_patch(mut config: Config, path: &Path) -> Config {
+  config.inner = path.to_path_buf();
+  config
 }
 
 #[cfg(feature = "toml")]
