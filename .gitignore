@@ -27,10 +27,8 @@ rustc-ice-*.txt
 #.idea/
 
 settings.txt
+settings.txt.txt
 settings.toml
-<<<<<<< HEAD
-=======
 
->>>>>>> dev-dist
 github.token.txt
 crates-io.token.txt
