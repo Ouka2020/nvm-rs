@@ -114,6 +114,10 @@ cargo build --release --no-default-features --features toml,debug
 cargo build --release --features debug
 ```
 
+## Acknowledgements
+
+This project is inspired by and based on [nvm-windows](https://github.com/nvm-windows/nvm). Many thanks to the original authors and contributors for their foundational work.
+
 ## License
 
 MIT
