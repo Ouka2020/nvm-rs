@@ -114,15 +114,6 @@ cargo build --release --no-default-features --features toml,debug
 cargo build --release --features debug
 ```
 
-## Project structure
-
-```
-src/
-├── lib.rs     # Core logic: install, uninstall, switch, download, etc.
-├── main.rs    # CLI entry point: parses args and dispatches commands
-└── model.rs   # Data models: CLI args, config, release database
-```
-
 ## License
 
 MIT
