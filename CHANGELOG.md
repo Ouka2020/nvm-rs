@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/Ouka2020/nvm-rs/compare/v0.1.1...v0.1.2) - 2026-09-15
+
+### Other
+
+- 删除README中多余的项目结构章节
+- 清理合并冲突，更新配置与依赖
+
 ## [0.1.1](https://github.com/Ouka2020/nvm-rs/compare/v0.1.0...v0.1.1) - 2026-09-14
 
 ### Other
