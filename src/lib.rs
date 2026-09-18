@@ -121,7 +121,8 @@ where
   for entry in fs::read_dir(root)? {
     let entry = entry?;
     if entry.file_type()?.is_file()
-      && entry.file_name().to_string_lossy().ends_with(".zip")
+      && let Some(e) = entry.path().extension()
+      && e == "zip"
     {
       let file_path = entry.path();
       log::debug!("delete zip file: {}", file_path.display());
@@ -132,10 +133,10 @@ where
 }
 
 pub fn display_architecture(config: Config) -> Result<()> {
-  let arch = get_arch(&config.arch);
+  let arch = get_arch();
   println!("current arch is {}", arch);
 
-  tips(arch);
+  tips(&arch);
 
   Ok(())
 }
@@ -302,15 +303,15 @@ where
   Ok(hex::encode(hasher.finalize()) == sha256_checksum)
 }
 
-fn get_arch(arch: &Option<ArchSpec>) -> &'static str {
-  match arch {
-    Some(ArchSpec::X64) => "x64",
-    Some(ArchSpec::X86) => "x86",
-    // todo: 没有考虑 arm 架构
-    None if get_processor_architecture().ends_with("64") => "x64",
-    None => "x86",
-  }
-}
+// fn get_arch() -> &'static str {
+//   match arch {
+//     Some(ArchSpec::X64) => "x64",
+//     Some(ArchSpec::X86) => "x86",
+//     // todo: 没有考虑 arm 架构
+//     None if get_processor_architecture().ends_with("64") => "x64",
+//     None => "x86",
+//   }
+// }
 
 /// Get the current version and architecture of Node.js.
 /// # Returns
@@ -349,7 +350,7 @@ where
   T: AsRef<Path>,
 {
   let mut versions = Vec::new();
-  let re = Regex::new(r"v\d+\.\d+\.\d+").unwrap();
+  let re = Regex::new(r"^v\d+\.\d+\.\d+$").unwrap();
 
   for entry in fs::read_dir(root.as_ref())? {
     let entry = entry?;
@@ -375,7 +376,7 @@ fn get_node_file_checksum_url(version: &str, base_url: &str) -> String {
   url
 }
 
-fn get_node_file_url(version: &str, arch: &str, base_url: &str) -> String {
+fn get_node_file_url(version: &str, arch: &ArchSpec, base_url: &str) -> String {
   let url =
     format!("{}/{}/node-{}-win-{}.zip", base_url, version, version, arch);
   log::debug!("url: {:?}", url);
@@ -398,18 +399,15 @@ fn get_nvm_symlink() -> Result<PathBuf> {
   Ok(env::var("NVM_SYMLINK")?.into())
 }
 
-pub fn get_processor_architecture() -> String {
-  // PROCESSOR_ARCHITEW6432 仅在 WOW64 子系统中存在
-  if env::var("PROCESSOR_ARCHITEW6432").is_ok() {
-    // 当前是 64 位系统上的 32 位进程
-    return "x64".to_string();
-  }
-
+pub fn get_arch() -> ArchSpec {
   match env::var("PROCESSOR_ARCHITECTURE") {
-    // todo: 没有考虑 arm 架构
-    Ok(val) if val.eq_ignore_ascii_case("AMD64") => "x64".to_string(),
-    Ok(val) => val.to_ascii_lowercase(),
-    Err(_) => String::new(),
+    // Ok(val) if val.eq_ignore_ascii_case("AMD64") => ArchSpec::X64,
+    Ok(val) if val.eq_ignore_ascii_case("ARM64") => ArchSpec::Arm64,
+    Ok(_) => ArchSpec::X64,
+    Err(e) => {
+      log::error!("get processor architecture failed: {:?}", e);
+      ArchSpec::X64
+    }
   }
 }
 
@@ -451,9 +449,9 @@ pub fn install_version(
 ) -> Result<()> {
   let root = get_root(&config)?;
 
-  let arch = get_arch(&arch);
+  let arch = get_arch();
   log::debug!("install: {:?} {}", version, arch);
-  tips(arch);
+  tips(&arch);
 
   let base_url = get_node_mirror(&config);
 
@@ -463,7 +461,7 @@ pub fn install_version(
     bail!("version {} already installed", ver);
   }
 
-  let url = get_node_file_url(&ver, arch, &base_url);
+  let url = get_node_file_url(&ver, &arch, &base_url);
   log::debug!("download url: {}", url);
 
   let root = root.as_path();
@@ -476,7 +474,7 @@ pub fn install_version(
 
   if !skip_checksum {
     let url = get_node_file_checksum_url(&ver, &base_url);
-    let checksum = load_checksum(&url, &ver, arch)?;
+    let checksum = load_checksum(&url, &ver, &arch)?;
     let valid = file_validate(&zip_path, &checksum)?;
     if !valid {
       bail!("sha256 checksum failed: {:?}", file_name);
@@ -499,15 +497,17 @@ pub fn install_version(
   Ok(())
 }
 
-fn load_checksum<B, V, A>(base_url: B, version: V, arch: A) -> Result<String>
+fn load_checksum<B, V>(
+  base_url: B,
+  version: V,
+  arch: &ArchSpec,
+) -> Result<String>
 where
   B: AsRef<str>,
   V: AsRef<str>,
-  A: AsRef<str>,
 {
   let base_url = base_url.as_ref();
   let version = version.as_ref();
-  let arch = arch.as_ref();
 
   let text_data = ureq::get(base_url).call()?.body_mut().read_to_string()?;
   log::debug!("body len: {}", text_data.len());
@@ -519,7 +519,8 @@ where
     let (Some(checksum), Some(name)) = (parts.next(), parts.next()) else {
       continue;
     };
-    if name == package_name {
+
+    if name.trim_start_matches('*') == package_name {
       return Ok(checksum.to_string());
     }
   }
@@ -603,6 +604,7 @@ pub fn list_versions(config: Config, is_remote_request: bool) -> Result<()> {
 #[cfg(feature = "debug")]
 pub fn log_init() {
   // 1. 滚动文件 Appender（按天轮转，保留30天）
+  std::fs::create_dir_all("./logs").expect("failed to create logs directory");
   let file_appender = RollingFileAppender::builder()
     .rotation(Rotation::DAILY)
     .filename_prefix("app")
@@ -656,12 +658,15 @@ where
 }
 
 fn safe_extract<T>(
-  entry: &mut zip::read::ZipFile<'_, BufReader<File>>,
+  mut entry:  zip::read::ZipFile<'_, BufReader<File>>,
   dest: T,
 ) -> Result<()>
 where
   T: AsRef<Path>,
 {
+  use std::fs::{File, create_dir_all};
+  use std::io::{BufWriter, copy};
+
   let dest_dir = dest.as_ref();
 
   // 防止 Zip Slip：解压后的路径必须仍在目标目录内
@@ -671,11 +676,12 @@ where
   }
 
   if entry.is_dir() {
-    std::fs::create_dir_all(&out_path)?;
+    create_dir_all(&out_path)?;
   } else if let Some(parent) = out_path.parent() {
-    std::fs::create_dir_all(parent)?;
-    let mut outfile = std::fs::File::create(&out_path)?;
-    std::io::copy(&mut entry.take(100 * 1024 * 1024), &mut outfile)?; // 限制100MB
+    create_dir_all(parent)?;
+    let mut writer = BufWriter::new(File::create(&out_path)?);
+
+    copy(&mut entry, &mut writer)?;
   }
   Ok(())
 }
@@ -686,7 +692,7 @@ pub fn switch_version(
   arch: Option<ArchSpec>,
 ) -> Result<()> {
   let root = get_root(&config)?;
-  let arch = get_arch(&arch);
+  let arch = get_arch();
 
   let base_url = get_node_mirror(&config);
 
@@ -700,7 +706,8 @@ pub fn switch_version(
     bail!("version {:?} is already used", ver);
   }
 
-  tips(arch);
+  // 提示用户使用 64 位版本
+  tips(&arch);
 
   log::debug!("ready switch to {:?}({})", version, arch);
 
@@ -711,9 +718,6 @@ pub fn switch_version(
 
   println!("switch to {} success.", ver);
 
-  // 提示用户使用 64 位版本
-  tips(arch);
-
   Ok(())
 }
 
@@ -723,8 +727,8 @@ pub fn switch_version(
 /// * `arch` - 架构, 例如 x64, x86
 /// # Returns
 /// * `()`
-fn tips(arch: &str) {
-  if arch != "x64" {
+fn tips(arch: &ArchSpec) {
+  if arch == &ArchSpec::X86 {
     println!(
       "\n* Notice: Since version v23.0.0, 32-bit versions are no longer available. Please use the 64-bit version."
     );
@@ -791,7 +795,7 @@ where
       if db.version_exists(s) {
         s.clone()
       } else {
-        bail!("node v{} not installed.", s)
+        bail!("node {} not installed.", s)
       }
     }
   };
@@ -819,28 +823,13 @@ where
   );
   for i in 0..archive.len() {
     let mut entry = archive.by_index(i)?;
-    safe_extract(&mut entry, &dest)?;
+    safe_extract(mut entry, &dest)?;
     pb.inc(1);
   }
   pb.finish();
   log::debug!("extract done");
   Ok(())
 }
-
-// fn download_version<T>(url: &str, dest: T) -> Result<()>
-// where
-//   T: AsRef<Path>,
-// {
-//   let resp = reqwest::get(url).await?.error_for_status()?;
-//   let total = resp.content_length().unwrap_or(0);
-//   let mut stream = ProgressStream::new(resp.bytes_stream(), total);
-//
-//   let mut file = tokio::fs::File::create(dest).await?;
-//   tokio::io::copy(&mut stream, &mut file).await?;
-//   stream.finish();
-//
-//   Ok(())
-// }
 
 #[cfg(test)]
 mod test {
@@ -852,7 +841,7 @@ mod test {
   fn config() -> Config {
     let mut config = Config::default();
     config.root = Some(PathBuf::from("nvmroot"));
-    config.arch = Some(ArchSpec::X64);
+    // config.arch = Some(ArchSpec::X64);
     config.node_mirror =
       Some("https://npmmirror.com/mirrors/node/".to_string());
 
@@ -912,23 +901,23 @@ mod test {
     assert_eq!(activate_version(config.clone()).is_ok(), true);
   }
 
-  // #[rstest]
-  // fn install_and_uninstall_version_test(config: Config) {
-  //   let ver = VersionSpec::Exact("v23.0.0".to_string());
-  //   let arch = ArchSpec::X64;
+  #[rstest]
+  fn install_and_uninstall_version_test(config: Config) {
+    let ver = VersionSpec::Exact("v23.0.0".to_string());
+    let arch = ArchSpec::X64;
 
-  //   let r = install_version(config.clone(), ver.clone(), Some(arch), false);
-  //   if let Err(e) = &r {
-  //     println!("{:?}", e);
-  //   }
-  //   assert_eq!(r.is_ok(), true);
+    let r = install_version(config.clone(), ver.clone(), Some(arch), false);
+    if let Err(e) = &r {
+      println!("{:?}", e);
+    }
+    assert_eq!(r.is_ok(), true);
 
-  //   let r = uninstall_version(config.clone(), ver);
-  //   if let Err(e) = &r {
-  //     println!("{:?}", e);
-  //   }
-  //   assert_eq!(r.is_ok(), true);
-  // }
+    let r = uninstall_version(config, ver);
+    if let Err(e) = &r {
+      println!("{:?}", e);
+    }
+    assert_eq!(r.is_ok(), true);
+  }
 
   #[rstest]
   fn list_local_versions_test(config: Config) {
@@ -946,6 +935,47 @@ mod test {
       display_or_update_npm_mirror(config.clone(), None).is_ok(),
       true
     );
+  }
+
+  #[rstest]
+  fn display_architecture_test(config: Config) {
+    assert_eq!(display_architecture(config.clone()).is_ok(), true);
+  }
+
+  #[rstest]
+  fn display_node_mirror_test(config: Config) {
+    assert_eq!(
+      display_or_update_node_mirror(config.clone(), None).is_ok(),
+      true
+    );
+  }
+
+  #[rstest]
+  fn display_proxy_test(config: Config) {
+    // display path
+    assert_eq!(display_or_update_proxy(config.clone(), None).is_ok(), true);
+    // remove proxy via "none"
+    let mut cfg = config.clone();
+    cfg.proxy = Some("http://127.0.0.1:8080".to_string());
+    assert_eq!(
+      display_or_update_proxy(cfg, Some("none".to_string())).is_ok(),
+      true
+    );
+  }
+
+  #[rstest]
+  fn display_root_test(config: Config) {
+    // display current root
+    assert_eq!(
+      display_or_update_root::<&str>(config.clone(), None).is_ok(),
+      true
+    );
+    // error: non-existent path
+    let r = display_or_update_root(
+      config.clone(),
+      Some(PathBuf::from("nonexistent_dir_xyz")),
+    );
+    assert_eq!(r.is_err(), true);
   }
 
   #[rstest]
