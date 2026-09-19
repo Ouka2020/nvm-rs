@@ -449,7 +449,7 @@ pub fn install_version(
 
   let arch = get_arch();
   log::debug!("install: {:?} {}", version, arch);
-  tips(&arch);
+  // tips(&arch);
 
   let base_url = get_node_mirror(&config);
 
@@ -700,8 +700,8 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result<()> {
     bail!("version {:?} is already used", ver);
   }
 
-  // 提示用户使用 64 位版本
-  tips(&arch);
+  // // 提示用户使用 64 位版本
+  // tips(&arch);
 
   log::debug!("ready switch to {:?}({})", version, arch);
 
@@ -714,19 +714,19 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result<()> {
   Ok(())
 }
 
-/// 提示<br>
-/// 如果使用的是 32 位版本, 则提示用户使用 64 位版本
-/// # Params
-/// * `arch` - 架构, 例如 x64, x86
-/// # Returns
-/// * `()`
-fn tips(arch: &ArchSpec) {
-  if arch == &ArchSpec::X86 {
-    println!(
-      "\n* Notice: Since version v23.0.0, 32-bit versions are no longer available. Please use the 64-bit version."
-    );
-  }
-}
+// /// 提示<br>
+// /// 如果使用的是 32 位版本, 则提示用户使用 64 位版本
+// /// # Params
+// /// * `arch` - 架构, 例如 x64, x86
+// /// # Returns
+// /// * `()`
+// fn tips(arch: &ArchSpec) {
+//   if arch == &ArchSpec::X86 {
+//     println!(
+//       "\n* Notice: Since version v23.0.0, 32-bit versions are no longer available. Please use the 64-bit version."
+//     );
+//   }
+// }
 
 pub fn uninstall_version(config: Config, version: VersionSpec) -> Result<()> {
   let root = get_root(&config)?;
