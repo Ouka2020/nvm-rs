@@ -1,7 +1,9 @@
+use crate::PROJECT_DIR;
+
 use super::Result;
 use anyhow::bail;
 use derive_more::Deref;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use strum::Display;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -49,14 +51,14 @@ pub enum Commands {
     /// The version can be a specific version, "latest" for the latest current version, or "lts" for the
     /// most recent LTS version. [possible values: <semver>(eg: 1.1.0), lts, latest]
     version: VersionSpec,
-    /// Specify whether to install the 32 or 64 bit version (defaults to system arch).
-    /// # deprecated
-    /// automatically by system arch.
-    #[deprecated(note = "automatically system arch")]
-    arch: Option<ArchSpec>,
-    /// Pass SSL validation of the remote download server.
+    // /// Specify whether to install the 32 or 64 bit version (defaults to system arch).
+    // /// # deprecated
+    // /// automatically by system arch.
+    // #[deprecated(note = "automatically system arch")]
+    // arch: Option<ArchSpec>,
+    /// Skip validation of the downloaded file.
     #[arg(short, long, default_value_t = false)]
-    insecure: bool,
+    skip: bool,
   },
   /// The version must be a specific version.
   #[command(visible_alias = "un")]
@@ -81,20 +83,20 @@ pub enum Commands {
     /// The path to set as the root directory.
     path: Option<String>,
   },
-  /// Show if node is running in 32 or 64 bit mode.
-  /// # deprecated
-  /// automatically by system arch.
-  #[deprecated(note = "automatically system arch")]
-  Arch,
-  /// Set a proxy to use for downloads.
-  /// # deprecated
-  /// automatically by system detect.
-  #[deprecated(note = "automatically system detect")]
-  Proxy {
-    /// Leave [url] blank to see the current proxy.
-    /// Set [url] to "none" to remove the proxy.
-    url: Option<String>,
-  },
+  // /// Show if node is running in 32 or 64 bit mode.
+  // /// # deprecated
+  // /// automatically by system arch.
+  // #[deprecated(note = "automatically system arch")]
+  // Arch,
+  // /// Set a proxy to use for downloads.
+  // /// # deprecated
+  // /// automatically by system detect.
+  // #[deprecated(note = "automatically system detect")]
+  // Proxy {
+  //   /// Leave [url] blank to see the current proxy.
+  //   /// Set [url] to "none" to remove the proxy.
+  //   url: Option<String>,
+  // },
   /// Display active version.
   Current,
   /// Set the node mirror. Defaults to https://nodejs.org/dist/. Leave [url] blank to use default url.
@@ -113,31 +115,31 @@ pub enum Commands {
   Use {
     /// The version to use.
     version: VersionSpec,
-    /// The architecture to use.
-    /// # deprecated
-    /// automatically by system arch.
-    #[deprecated(note = "automatically system arch")]
-    arch: Option<ArchSpec>,
+    // /// The architecture to use.
+    // /// # deprecated
+    // /// automatically by system arch.
+    // #[deprecated(note = "automatically system arch")]
+    // arch: Option<ArchSpec>,
   },
 }
 
 #[derive(Clone, Debug, ValueEnum, Display, Deserialize, PartialEq)]
 // #[repr(u8)]
 pub enum ArchSpec {
-  /// 32 bit<br>
-  /// Since v23.0.0, not supported on Windows.
-  // #[value(name = "32")]
-  // #[strum(to_string = "32")]
-  X86,
+  // /// 32 bit<br>
+  // /// Since v23.0.0, not supported on Windows.
+  // // #[value(name = "32")]
+  // #[strum(to_string = "x86")]
+  // X86,
   /// 64 bit<br>
   /// it is suggested to use 64 bit version.
   // #[value(name = "64")]
-  // #[strum(to_string = "64")]
+  #[strum(to_string = "x64")]
   X64,
   /// 64 bit ARM<br>
   /// Since v19.9.0, supported on Windows.
   // #[value(name = "arm64")]
-  // #[strum(to_string = "arm64")]
+  #[strum(to_string = "arm64")]
   Arm64,
 }
 
@@ -310,13 +312,13 @@ const CONFIG_FILE_NAME: &str = "settings";
 pub struct Config {
   /// Node.js storage root
   pub root: Option<PathBuf>,
-  /// Node.js proxy
-  #[serde(deserialize_with = "deserialize_proxy")]
-  #[deprecated(
-    since = "0.1.3",
-    note = "proxy is deprecated, can auto detect it"
-  )]
-  pub proxy: Option<String>,
+  // /// Node.js proxy
+  // #[serde(deserialize_with = "deserialize_proxy")]
+  // #[deprecated(
+  //   since = "0.1.3",
+  //   note = "proxy is deprecated, can auto detect it"
+  // )]
+  // pub proxy: Option<String>,
   /// Node.js mirror
   pub node_mirror: Option<String>,
   /// npm mirror
@@ -337,26 +339,26 @@ pub struct Config {
   )]
   pub originalversion: Option<String>,
   // pub symlink: Option<String>,
-  #[serde(skip)]
-  config_path: PathBuf,
+  // #[serde(skip)]
+  // config_path: PathBuf,
 }
 
-fn deserialize_proxy<'de, D>(
-  deserializer: D,
-) -> core::result::Result<Option<String>, D::Error>
-where
-  D: Deserializer<'de>,
-{
-  let s = String::deserialize(deserializer)?;
-  if s.is_empty()
-    || s.eq_ignore_ascii_case("null")
-    || s.eq_ignore_ascii_case("none")
-  {
-    return Ok(None);
-  }
+// fn deserialize_proxy<'de, D>(
+//   deserializer: D,
+// ) -> core::result::Result<Option<String>, D::Error>
+// where
+//   D: Deserializer<'de>,
+// {
+//   let s = String::deserialize(deserializer)?;
+//   if s.is_empty()
+//     || s.eq_ignore_ascii_case("null")
+//     || s.eq_ignore_ascii_case("none")
+//   {
+//     return Ok(None);
+//   }
 
-  Ok(Some(s))
-}
+//   Ok(Some(s))
+// }
 
 impl Config {
   /// Load config from file. Returns None if no config file exists.<br>
@@ -368,47 +370,48 @@ impl Config {
 
     // // 从当前目录加载配置文件
     // let current_dir = std::env::current_dir()?;
-    let Ok(current_dir) = get_exec_path() else {
-      bail!("failed to get current exe path");
-    };
+    // let Ok(current_dir) = get_exec_path() else {
+    //   bail!("failed to get current exe path");
+    // };
 
-    #[cfg(feature = "yaml")]
-    {
-      if let Some(config) = read_from_txt(&current_dir) {
-        return Ok(config_path_patch(config, &current_dir));
-      }
-    }
+    let current_dir = get_config_path();
 
     #[cfg(feature = "toml")]
     {
       if let Some(config) = read_from_toml(&current_dir) {
-        return Ok(config_path_patch(config, &current_dir));
+        return Ok(config);
       }
     }
 
-    Ok(config_path_patch(Config::default(), &current_dir))
+    #[cfg(feature = "yaml")]
+    {
+      if let Some(config) = read_from_txt(&current_dir) {
+        return Ok(config);
+      }
+    }
+
+    Ok(Config::default())
   }
 
   pub fn save(&self) -> Result {
     log::debug!("save config");
 
+    let path = PROJECT_DIR.config_dir();
+    std::fs::create_dir_all(path)?;
+
     #[cfg(feature = "toml")]
     {
       let config_str = toml::to_string(self)?;
-      let path_str = self
-        .config_path
-        .join(CONFIG_FILE_NAME)
-        .with_extension("toml");
+      let path_str = path.join(CONFIG_FILE_NAME).with_extension("toml");
       std::fs::write(&path_str, config_str)?;
+
+      return Ok(());
     }
 
     #[cfg(feature = "yaml")]
     {
       let config_str = noyalib::to_string(self)?;
-      let path_str = self
-        .config_path
-        .join(CONFIG_FILE_NAME)
-        .with_extension("txt");
+      let path_str = path.join(CONFIG_FILE_NAME).with_extension("txt");
       std::fs::write(&path_str, config_str)?;
     }
 
@@ -471,21 +474,27 @@ where
   Some(config)
 }
 
-fn config_path_patch(mut config: Config, path: &Path) -> Config {
-  config.config_path = path.to_path_buf();
-  config
-}
+// fn config_path_patch(mut config: Config, path: &Path) -> Config {
+//   config.config_path = path.to_path_buf();
+//   config
+// }
 
-fn get_exec_path() -> Result<PathBuf> {
-  let Ok(exe_path) = std::env::current_exe() else {
-    bail!("failed to get current exe path");
-  };
+// fn get_exec_path() -> Result<PathBuf> {
+//   let Ok(exe_path) = std::env::current_exe() else {
+//     bail!("failed to get current exe path");
+//   };
 
-  let Some(current_dir) = exe_path.parent() else {
-    bail!("failed to get current exe path");
-  };
+//   let Some(current_dir) = exe_path.parent() else {
+//     bail!("failed to get current exe path");
+//   };
 
-  Ok(current_dir.to_path_buf())
+//   Ok(current_dir.to_path_buf())
+// }
+
+fn get_config_path() -> PathBuf {
+  let path = PROJECT_DIR.config_dir();
+  let _ = std::fs::create_dir_all(path);
+  path.to_path_buf()
 }
 
 #[cfg(test)]
@@ -537,9 +546,9 @@ mod tests {
 
   #[rstest]
   fn arch_spec_display() {
-    assert_eq!(ArchSpec::X86.to_string(), "X86");
-    assert_eq!(ArchSpec::X64.to_string(), "X64");
-    assert_eq!(ArchSpec::Arm64.to_string(), "Arm64");
+    // assert_eq!(ArchSpec::X86.to_string(), "x86");
+    assert_eq!(ArchSpec::X64.to_string(), "x64");
+    assert_eq!(ArchSpec::Arm64.to_string(), "arm64");
   }
 
   // ---------- LtsSpec / NodeReleaseInfo ----------
@@ -658,21 +667,21 @@ mod tests {
     assert!(config.is_valid().is_err());
   }
 
-  #[rstest]
-  fn config_proxy_deserializes() {
-    let cases = [
-      (r#"{"proxy": ""}"#, None),
-      (r#"{"proxy": "none"}"#, None),
-      (r#"{"proxy": "NULL"}"#, None),
-      (
-        r#"{"proxy": "http://127.0.0.1:8080"}"#,
-        Some("http://127.0.0.1:8080"),
-      ),
-    ];
+  // #[rstest]
+  // fn config_proxy_deserializes() {
+  //   let cases = [
+  //     (r#"{"proxy": ""}"#, None),
+  //     (r#"{"proxy": "none"}"#, None),
+  //     (r#"{"proxy": "NULL"}"#, None),
+  //     (
+  //       r#"{"proxy": "http://127.0.0.1:8080"}"#,
+  //       Some("http://127.0.0.1:8080"),
+  //     ),
+  //   ];
 
-    for (json, expected) in cases {
-      let config: Config = serde_json::from_str(json).unwrap();
-      assert_eq!(config.proxy.as_deref(), expected, "case: {json}");
-    }
-  }
+  //   for (json, expected) in cases {
+  //     let config: Config = serde_json::from_str(json).unwrap();
+  //     assert_eq!(config.proxy.as_deref(), expected, "case: {json}");
+  //   }
+  // }
 }

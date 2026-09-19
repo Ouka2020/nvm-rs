@@ -13,6 +13,7 @@ use regex::Regex;
 use url::Url;
 use zip::ZipArchive;
 
+use std::sync::LazyLock;
 #[cfg(feature = "debug")]
 use std::sync::OnceLock;
 #[cfg(feature = "debug")]
@@ -34,6 +35,13 @@ static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 #[cfg(feature = "debug")]
 const LOG_FILTER: &str = "info,nvm_windows=debug";
+
+static PROJECT_DIR: LazyLock<directories::ProjectDirs> = LazyLock::new(|| {
+  directories::ProjectDirs::from("", "", "nvm").expect("fail to load app root.")
+});
+
+// static HTTP_CLIENT: LazyLock<ureq::Agent> =
+//   LazyLock::new(|| ureq::Agent::config_builder().timeout_global(Some(Duration::from_mins(mins))));
 
 const LIST_COUNT: usize = 20;
 
@@ -132,15 +140,6 @@ where
   Ok(())
 }
 
-pub fn display_architecture(config: Config) -> Result<()> {
-  let arch = get_arch();
-  println!("current arch is {}", arch);
-
-  tips(&arch);
-
-  Ok(())
-}
-
 pub fn display_current() -> Result<()> {
   let (current_version, _) = get_current_version_and_arch();
   if !current_version.is_empty() {
@@ -184,25 +183,25 @@ pub fn display_or_update_node_mirror(
   Ok(())
 }
 
-pub fn display_or_update_proxy(
-  mut config: Config,
-  url: Option<String>,
-) -> Result<()> {
-  if let Some(url) = url {
-    config.proxy = if url.eq_ignore_ascii_case("none") {
-      None
-    } else {
-      Some(url)
-    };
-    config.save()?;
-  } else if let Some(proxy) = config.proxy {
-    println!("Current Proxy: {:?}", proxy);
-  } else {
-    println!("No Proxy set.");
-  }
+// pub fn display_or_update_proxy(
+//   mut config: Config,
+//   url: Option<String>,
+// ) -> Result<()> {
+//   if let Some(url) = url {
+//     config.proxy = if url.eq_ignore_ascii_case("none") {
+//       None
+//     } else {
+//       Some(url)
+//     };
+//     config.save()?;
+//   } else if let Some(proxy) = config.proxy {
+//     println!("Current Proxy: {:?}", proxy);
+//   } else {
+//     println!("No Proxy set.");
+//   }
 
-  Ok(())
-}
+//   Ok(())
+// }
 
 pub fn display_or_update_root<T>(
   mut config: Config,
@@ -444,7 +443,6 @@ fn get_root(config: &Config) -> Result<PathBuf> {
 pub fn install_version(
   config: Config,
   version: VersionSpec,
-  arch: Option<ArchSpec>,
   skip_checksum: bool,
 ) -> Result<()> {
   let root = get_root(&config)?;
@@ -658,7 +656,7 @@ where
 }
 
 fn safe_extract<T>(
-  mut entry:  zip::read::ZipFile<'_, BufReader<File>>,
+  entry: &mut zip::read::ZipFile<'_, BufReader<File>>,
   dest: T,
 ) -> Result<()>
 where
@@ -681,16 +679,12 @@ where
     create_dir_all(parent)?;
     let mut writer = BufWriter::new(File::create(&out_path)?);
 
-    copy(&mut entry, &mut writer)?;
+    copy(entry, &mut writer)?;
   }
   Ok(())
 }
 
-pub fn switch_version(
-  config: Config,
-  version: VersionSpec,
-  arch: Option<ArchSpec>,
-) -> Result<()> {
+pub fn switch_version(config: Config, version: VersionSpec) -> Result<()> {
   let root = get_root(&config)?;
   let arch = get_arch();
 
@@ -713,7 +707,6 @@ pub fn switch_version(
 
   let node_path = root.join(&ver).clean();
 
-  // 创建符号链接, 仅在 Windows 上有效
   reset_junction_link(get_nvm_symlink()?, node_path)?;
 
   println!("switch to {} success.", ver);
@@ -747,17 +740,16 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result<()> {
       );
     }
     VersionSpec::Exact(ver) => {
-      // let ver = format!("v{}", ver);
       if !versions.contains(&ver) {
         bail!("version {:?} not installed", ver);
       }
       if get_current_version_and_arch().0 == ver {
-        bail!("current version {} is in use, can not uninstall it", ver);
+        bail!("version {:?} is in use, can not uninstall it", ver);
       }
 
       delete_version(&root, &ver)?;
 
-      println!("uninstall {} completed.", ver);
+      println!("uninstall {:?} completed.", ver);
     }
   }
 
@@ -795,7 +787,7 @@ where
       if db.version_exists(s) {
         s.clone()
       } else {
-        bail!("node {} not installed.", s)
+        bail!("version {:?} not exists.", s)
       }
     }
   };
@@ -823,7 +815,7 @@ where
   );
   for i in 0..archive.len() {
     let mut entry = archive.by_index(i)?;
-    safe_extract(mut entry, &dest)?;
+    safe_extract(&mut entry, &dest)?;
     pb.inc(1);
   }
   pb.finish();
@@ -904,9 +896,8 @@ mod test {
   #[rstest]
   fn install_and_uninstall_version_test(config: Config) {
     let ver = VersionSpec::Exact("v23.0.0".to_string());
-    let arch = ArchSpec::X64;
 
-    let r = install_version(config.clone(), ver.clone(), Some(arch), false);
+    let r = install_version(config.clone(), ver.clone(), false);
     if let Err(e) = &r {
       println!("{:?}", e);
     }
@@ -938,27 +929,9 @@ mod test {
   }
 
   #[rstest]
-  fn display_architecture_test(config: Config) {
-    assert_eq!(display_architecture(config.clone()).is_ok(), true);
-  }
-
-  #[rstest]
   fn display_node_mirror_test(config: Config) {
     assert_eq!(
       display_or_update_node_mirror(config.clone(), None).is_ok(),
-      true
-    );
-  }
-
-  #[rstest]
-  fn display_proxy_test(config: Config) {
-    // display path
-    assert_eq!(display_or_update_proxy(config.clone(), None).is_ok(), true);
-    // remove proxy via "none"
-    let mut cfg = config.clone();
-    cfg.proxy = Some("http://127.0.0.1:8080".to_string());
-    assert_eq!(
-      display_or_update_proxy(cfg, Some("none".to_string())).is_ok(),
       true
     );
   }
@@ -981,8 +954,7 @@ mod test {
   #[rstest]
   fn switch_version_test(config: Config) {
     let ver = VersionSpec::Exact("v24.2.0".to_string());
-    let arch = ArchSpec::X64;
-    let r = switch_version(config.clone(), ver, Some(arch));
+    let r = switch_version(config.clone(), ver);
     if let Err(e) = &r {
       println!("{:?}", e);
       assert_eq!(e.to_string(), "version \"v24.2.0\" not installed");
