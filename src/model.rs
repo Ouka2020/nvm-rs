@@ -3,12 +3,14 @@ use crate::PROJECT_DIR;
 use super::Result;
 use anyhow::bail;
 use derive_more::Deref;
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::Path;
 use std::path::PathBuf;
+use url::Url;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -35,7 +37,14 @@ impl std::str::FromStr for VersionSpec {
     match s.to_lowercase().as_str() {
       "lts" => Ok(Self::Lts),
       "latest" => Ok(Self::Latest),
-      v => Ok(Self::Exact(format!("v{}", v))),
+      v => {
+        // Check if the version is already prefixed with 'v'
+        if v.starts_with('v') {
+          Ok(Self::Exact(v.to_string()))
+        } else {
+          Ok(Self::Exact(format!("v{}", v)))
+        }
+      }
     }
   }
 }
@@ -102,12 +111,12 @@ pub enum Commands {
   /// Set the node mirror. Defaults to https://nodejs.org/dist/. Leave [url] blank to use default url.
   NodeMirror {
     /// The node mirror to use. Leave [url] blank to use default url.
-    url: Option<String>,
+    url: Option<Url>,
   },
   /// Set the npm mirror. Defaults to https://github.com/npm/cli/archive/. Leave [url] blank to use default url.
   NpmMirror {
     /// The npm mirror to use. Leave [url] blank to use default url.
-    url: Option<String>,
+    url: Option<Url>,
   },
   /// Switch to use the specified version. Optionally use "latest", "lts", or "newest".
   /// "newest" is the latest installed version. Optionally specify 32/64bit architecture.
@@ -121,6 +130,8 @@ pub enum Commands {
     // #[deprecated(note = "automatically system arch")]
     // arch: Option<ArchSpec>,
   },
+  /// Set up the application.
+  Setup,
 }
 
 #[derive(Clone, Debug, ValueEnum, Display, Deserialize, PartialEq)]
@@ -143,13 +154,36 @@ pub enum ArchSpec {
   Arm64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
+// #[serde(untagged)]
 // 字段负载仅用于反序列化时区分变体，业务上只判断变体形状
 #[allow(dead_code)]
 pub enum LtsSpec {
   Codename(String),
-  NotLts(bool), // 只接受 false；如果 JSON 里出现 true 也会匹配进来
+  NotLts,
+}
+
+impl<'de> Deserialize<'de> for LtsSpec {
+  fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    // 用 untagged helper 同时接受 string 和 bool
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+      Str(String),
+      Bool(bool),
+    }
+
+    match Raw::deserialize(deserializer)? {
+      Raw::Str(s) => Ok(LtsSpec::Codename(s)),
+      Raw::Bool(false) => Ok(LtsSpec::NotLts),
+      Raw::Bool(true) => Err(serde::de::Error::custom(
+        "expected a codename string or `false`, found `true`",
+      )),
+    }
+  }
 }
 
 /// Node.js 版本发布信息
@@ -269,7 +303,7 @@ impl ReleaseDatabase {
     let list: Vec<_> = self
       .inner
       .iter()
-      .filter(|r| matches!(r.lts, LtsSpec::NotLts(false)))
+      .filter(|r| matches!(r.lts, LtsSpec::NotLts))
       .take(count)
       .map(|r| r.version.clone())
       .collect();
@@ -320,9 +354,11 @@ pub struct Config {
   // )]
   // pub proxy: Option<String>,
   /// Node.js mirror
-  pub node_mirror: Option<String>,
+  #[serde(deserialize_with = "deserialize_mirror")]
+  pub node_mirror: Option<Url>,
   /// npm mirror
-  pub npm_mirror: Option<String>,
+  #[serde(deserialize_with = "deserialize_mirror")]
+  pub npm_mirror: Option<Url>,
   // #[deprecated(
   //   since = "0.1.3",
   //   note = "arch is deprecated, can auto detect it"
@@ -338,27 +374,30 @@ pub struct Config {
     note = "originalversion is deprecated, maybe deleted in future"
   )]
   pub originalversion: Option<String>,
-  // pub symlink: Option<String>,
-  // #[serde(skip)]
-  // config_path: PathBuf,
 }
 
-// fn deserialize_proxy<'de, D>(
-//   deserializer: D,
-// ) -> core::result::Result<Option<String>, D::Error>
-// where
-//   D: Deserializer<'de>,
-// {
-//   let s = String::deserialize(deserializer)?;
-//   if s.is_empty()
-//     || s.eq_ignore_ascii_case("null")
-//     || s.eq_ignore_ascii_case("none")
-//   {
-//     return Ok(None);
-//   }
+fn deserialize_mirror<'de, D>(
+  deserializer: D,
+) -> core::result::Result<Option<Url>, D::Error>
+where
+  D: Deserializer<'de>,
+{
+  let s = String::deserialize(deserializer)?;
+  if s.is_empty()
+    || s.eq_ignore_ascii_case("null")
+    || s.eq_ignore_ascii_case("none")
+  {
+    return Ok(None);
+  }
 
-//   Ok(Some(s))
-// }
+  match Url::parse(&s) {
+    Ok(url) => Ok(Some(url)),
+    Err(e) => {
+      log::warn!("failed to parse {}: {}", s, e);
+      Ok(None)
+    }
+  }
+}
 
 impl Config {
   /// Load config from file. Returns None if no config file exists.<br>
@@ -374,7 +413,7 @@ impl Config {
     //   bail!("failed to get current exe path");
     // };
 
-    let current_dir = get_config_path();
+    let current_dir = PROJECT_DIR.preference_dir();
 
     #[cfg(feature = "toml")]
     {
@@ -396,8 +435,7 @@ impl Config {
   pub fn save(&self) -> Result {
     log::debug!("save config");
 
-    let path = PROJECT_DIR.config_dir();
-    std::fs::create_dir_all(path)?;
+    let path = PROJECT_DIR.preference_dir();
 
     #[cfg(feature = "toml")]
     {
@@ -466,35 +504,21 @@ where
     log::warn!("failed to read {}", file_path.display());
     return None;
   };
-  let Ok(config) = noyalib::from_str::<Config>(&data) else {
-    log::warn!("failed to parse {}:", file_path.display());
-    return None;
-  };
 
-  Some(config)
-}
+  match noyalib::from_str::<Config>(&data) {
+    Ok(config) => Some(config),
+    Err(e) => {
+      log::warn!("failed to parse {}: {}", file_path.display(), e);
+      None
+    }
+  }
 
-// fn config_path_patch(mut config: Config, path: &Path) -> Config {
-//   config.config_path = path.to_path_buf();
-//   config
-// }
+  // let Ok(config) = noyalib::from_str::<Config>(&data) else {
+  //   log::warn!("failed to parse {}:", file_path.display());
+  //   return None;
+  // };
 
-// fn get_exec_path() -> Result<PathBuf> {
-//   let Ok(exe_path) = std::env::current_exe() else {
-//     bail!("failed to get current exe path");
-//   };
-
-//   let Some(current_dir) = exe_path.parent() else {
-//     bail!("failed to get current exe path");
-//   };
-
-//   Ok(current_dir.to_path_buf())
-// }
-
-fn get_config_path() -> PathBuf {
-  let path = PROJECT_DIR.config_dir();
-  let _ = std::fs::create_dir_all(path);
-  path.to_path_buf()
+  // Some(config)
 }
 
 #[cfg(test)]
@@ -568,7 +592,7 @@ mod tests {
       r#"{"version":"v22.0.0","date":"2024-04-01","lts":false}"#,
     )
     .unwrap();
-    assert!(matches!(info.lts, LtsSpec::NotLts(false)));
+    assert!(matches!(info.lts, LtsSpec::NotLts));
   }
 
   // ---------- fill_len ----------

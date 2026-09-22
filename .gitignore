@@ -33,3 +33,5 @@ settings.toml
 
 github.token.txt
 crates-io.token.txt
+
+index.json

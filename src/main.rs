@@ -3,8 +3,8 @@ use nvm_windows::model::{CliArgs, Commands, Config};
 use nvm_windows::{
   Result, activate_version, deactivate_version, display_current,
   display_or_update_node_mirror, display_or_update_npm_mirror,
-  display_or_update_root, install_version, list_versions, switch_version,
-  uninstall_version,
+  display_or_update_root, install_version, list_versions, setup,
+  switch_version, uninstall_version,
 };
 
 #[cfg(feature = "debug")]
@@ -21,6 +21,7 @@ fn main() -> Result<()> {
   config.is_valid()?;
 
   match args.command {
+    Commands::Setup => setup(config)?,
     Commands::Install {
       version,
       skip: insecure,

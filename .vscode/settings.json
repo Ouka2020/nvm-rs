@@ -9,7 +9,9 @@
     "originalpath",
     "originalversion",
     "SHASUMS",
+    "subkey",
     "trae",
+    "winreg",
     "winresource"
   ]
 }

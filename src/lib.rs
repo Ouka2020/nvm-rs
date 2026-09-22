@@ -8,9 +8,14 @@ use std::{
 use anyhow::bail;
 use comfy_table::{Cell, CellAlignment, Table, presets};
 use indicatif::{ProgressBar, ProgressStyle};
+use inquire::validator::Validation;
 use path_clean::PathClean;
 use regex::Regex;
 use url::Url;
+use winreg::{
+  RegKey,
+  enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
+};
 use zip::ZipArchive;
 
 use std::sync::LazyLock;
@@ -37,7 +42,11 @@ static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 const LOG_FILTER: &str = "info,nvm_windows=debug";
 
 static PROJECT_DIR: LazyLock<directories::ProjectDirs> = LazyLock::new(|| {
-  directories::ProjectDirs::from("", "", "nvm").expect("fail to load app root.")
+  let dir = directories::ProjectDirs::from("", "", "nvm")
+    .expect("fail to load app root.");
+  std::fs::create_dir_all(dir.preference_dir())
+    .expect("fail to create preference dir.");
+  dir
 });
 
 // static HTTP_CLIENT: LazyLock<ureq::Agent> =
@@ -47,7 +56,7 @@ const LIST_COUNT: usize = 20;
 
 pub type Result<T = ()> = anyhow::Result<T>;
 
-pub fn activate_version(config: Config) -> Result<()> {
+pub fn activate_version(config: Config) -> Result {
   let symlink = get_nvm_symlink()?;
   if let Ok(metadata) = fs::symlink_metadata(&symlink)
     && metadata.is_symlink()
@@ -72,7 +81,7 @@ pub fn activate_version(config: Config) -> Result<()> {
 /// # Params
 /// * `link` - 符号路径, 例如 c:\\program files\\nodejs
 /// * `target` - 目标路径, 例如 d:\\nodejs_root\\v18.16.0
-fn create_junction_link<T, L>(link: T, target: L) -> Result<()>
+fn create_junction_link<T, L>(link: T, target: L) -> Result
 where
   T: AsRef<Path>,
   L: AsRef<Path>,
@@ -86,7 +95,7 @@ where
   Ok(())
 }
 
-pub fn deactivate_version() -> Result<()> {
+pub fn deactivate_version() -> Result {
   let symlink = get_nvm_symlink()?;
   let Ok(_) = fs::symlink_metadata(&symlink) else {
     bail!("node is already deactivated");
@@ -99,7 +108,7 @@ pub fn deactivate_version() -> Result<()> {
   Ok(())
 }
 
-fn delete_junction_link<T>(link: T) -> Result<()>
+fn delete_junction_link<T>(link: T) -> Result
 where
   T: AsRef<Path>,
 {
@@ -113,7 +122,7 @@ where
   Ok(())
 }
 
-fn delete_version(root: &Path, ver: &str) -> Result<()> {
+fn delete_version(root: &Path, ver: &str) -> Result {
   let path = root.join(ver);
   log::debug!("delete: {:?}", path);
   fs::remove_dir_all(&path)?;
@@ -121,7 +130,7 @@ fn delete_version(root: &Path, ver: &str) -> Result<()> {
   Ok(())
 }
 
-fn delete_zip_files<T>(root: T) -> Result<()>
+fn delete_zip_files<T>(root: T) -> Result
 where
   T: AsRef<Path>,
 {
@@ -140,7 +149,7 @@ where
   Ok(())
 }
 
-pub fn display_current() -> Result<()> {
+pub fn display_current() -> Result {
   let (current_version, _) = get_current_version_and_arch();
   if !current_version.is_empty() {
     println!("current version is {}", current_version);
@@ -153,8 +162,8 @@ pub fn display_current() -> Result<()> {
 
 pub fn display_or_update_npm_mirror(
   mut config: Config,
-  url: Option<String>,
-) -> Result<()> {
+  url: Option<Url>,
+) -> Result {
   if let Some(url) = url {
     config.npm_mirror = Some(url);
     config.save()?;
@@ -169,13 +178,13 @@ pub fn display_or_update_npm_mirror(
 
 pub fn display_or_update_node_mirror(
   mut config: Config,
-  url: Option<String>,
-) -> Result<()> {
+  url: Option<Url>,
+) -> Result {
   if let Some(url) = url {
     config.node_mirror = Some(url);
     config.save()?;
   } else if let Some(node_mirror) = config.node_mirror {
-    println!("Current NodeMirror: {:?}", node_mirror);
+    println!("Current NodeMirror: {}", node_mirror);
   } else {
     println!("No NodeMirror set.");
   }
@@ -203,10 +212,7 @@ pub fn display_or_update_node_mirror(
 //   Ok(())
 // }
 
-pub fn display_or_update_root<T>(
-  mut config: Config,
-  path: Option<T>,
-) -> Result<()>
+pub fn display_or_update_root<T>(mut config: Config, path: Option<T>) -> Result
 where
   T: AsRef<Path>,
 {
@@ -230,7 +236,7 @@ where
   Ok(())
 }
 
-pub fn download_file<U, D>(url: U, dest: D) -> Result<()>
+pub fn download_file<U, D>(url: U, dest: D) -> Result
 where
   U: AsRef<str>,
   D: AsRef<Path>,
@@ -302,15 +308,163 @@ where
   Ok(hex::encode(hasher.finalize()) == sha256_checksum)
 }
 
-// fn get_arch() -> &'static str {
-//   match arch {
-//     Some(ArchSpec::X64) => "x64",
-//     Some(ArchSpec::X86) => "x86",
-//     // todo: 没有考虑 arm 架构
-//     None if get_processor_architecture().ends_with("64") => "x64",
-//     None => "x86",
-//   }
-// }
+pub fn setup(mut config: Config) -> Result {
+  let link_path =
+    inquire::Text::new("Which directory to use as the symlink path?")
+      .with_default(r"C:\Program Files\nodejs")
+      .with_help_message("Tip: The symlink must not already exist.")
+      .with_validator(symlink_validator)
+      .prompt()?;
+
+  let node_store_root =
+    inquire::Text::new("Which directory to use as the node store root?")
+      .with_default(&PROJECT_DIR.data_local_dir().to_string_lossy())
+      // .with_help_message("Tip: The node store root must not already exist.")
+      .with_validator(node_store_root_validator)
+      .prompt()?;
+
+  let node_mirror = node_mirror_prompt()?;
+
+  let npm_mirror = npm_mirror_prompt()?;
+
+  config.root = Some(PathBuf::from(node_store_root));
+  config.node_mirror = Some(url::Url::parse(&node_mirror)?);
+  config.npm_mirror = Some(url::Url::parse(&npm_mirror)?);
+
+  update_environment(link_path)?;
+
+  log::debug!("config: {:?}", config);
+  config.save()?;
+
+  println!("Done. Please restart the console to update the environment.");
+
+  Ok(())
+}
+
+type ValidatorResult =
+  core::result::Result<Validation, Box<dyn core::error::Error + Send + Sync>>;
+
+fn symlink_validator(value: &str) -> ValidatorResult {
+  let path = std::path::Path::new(value.trim());
+  if path.exists() {
+    return Ok(Validation::Invalid(
+      "The symbolic link already exists.".into(),
+    ));
+  }
+
+  if let Some(_) = path.extension() {
+    return Ok(Validation::Invalid(
+      "The symbolic link path must be a directory.".into(),
+    ));
+  }
+
+  Ok(Validation::Valid)
+}
+
+fn node_store_root_validator(value: &str) -> ValidatorResult {
+  let path = std::path::Path::new(value.trim());
+
+  if let Some(_) = path.extension() {
+    return Ok(Validation::Invalid(
+      "The symbolic link path must be a directory.".into(),
+    ));
+  }
+
+  if !path.exists() {
+    log::debug!(
+      "node store root directory is not exist. create it: {:?}",
+      path
+    );
+    std::fs::create_dir_all(path).map_err(|e| {
+      anyhow::anyhow!("failed to create node store root directory: {:?}", e)
+    })?;
+  }
+
+  Ok(Validation::Valid)
+}
+
+fn url_validator(value: &str) -> ValidatorResult {
+  let Ok(path) = url::Url::parse(value.trim()) else {
+    return Ok(Validation::Invalid("Must be a valid URL.".into()));
+  };
+
+  if !matches!(path.scheme(), "https" | "http") || path.host().is_none() {
+    return Ok(Validation::Invalid(
+      "Only HTTP and HTTPS protocols are supported.".into(),
+    ));
+  }
+
+  Ok(Validation::Valid)
+}
+
+fn node_mirror_prompt() -> Result<String> {
+  let node_mirror_list = vec!["https://npmmirror.com/mirrors/node/"];
+
+  mirror_prompt(
+    node_mirror_list,
+    "Which mirror to use for nodejs?",
+    "Please input the node mirror address:",
+  )
+}
+
+fn npm_mirror_prompt() -> Result<String> {
+  let npm_mirror_list = vec!["https://npmmirror.com/mirrors/npm/"];
+
+  mirror_prompt(
+    npm_mirror_list,
+    "Which mirror to use for npm?",
+    "Please input the npm mirror address:",
+  )
+}
+
+/// Prompts the user to select a mirror from a predefined list or enter a custom mirror address.
+///
+/// This function automatically prepends `"none"` and appends `"custom"` to the provided
+/// `options` list, then presents an interactive selection menu. If the user selects
+/// `"custom"`, they will be further prompted to input a custom mirror value.
+///
+/// # Arguments
+///
+/// * `options` - A list of predefined mirror options (e.g., mirror names or URLs).
+/// * `select_prompt` - The prompt message displayed for the selection menu
+///   (e.g., "Please select a mirror:").
+/// * `text_prompt` - The prompt message displayed in the text input when the user
+///   selects "custom" (e.g., "Enter custom mirror URL:").
+///
+/// # Returns
+///
+/// * `Ok(String)` - The selected predefined mirror name, or the custom mirror
+///   string entered by the user.
+///
+/// # Errors
+///
+/// * Returns an `Err` variant of `r4::Result` when the user cancels the interaction
+///   (e.g., by pressing `Ctrl+C` / `Esc`) or when an underlying I/O error occurs.
+///   The error is typically converted from an `inquire` error.
+fn mirror_prompt(
+  mut options: Vec<&'static str>,
+  select_prompt: &str,
+  text_prompt: &str,
+) -> Result<String> {
+  // 预分配容量，避免重新分配内存
+  options.reserve(2);
+  // 在头部插入 "none"
+  options.insert(0, "none");
+  // 在尾部追加 "custom"
+  options.push("custom");
+
+  let mirror = inquire::Select::new(select_prompt, options).prompt()?;
+  if mirror != "custom" {
+    return Ok(mirror.to_string());
+  }
+
+  let mirror_url = inquire::Text::new(text_prompt)
+    // .with_help_message("Tip: The node store root must not already exist.")
+    .with_validator(url_validator)
+    .prompt()?;
+
+  Ok(mirror_url)
+}
 
 /// Get the current version and architecture of Node.js.
 /// # Returns
@@ -339,6 +493,24 @@ pub fn get_current_version_and_arch() -> (String, String) {
   log::debug!("version: {}", version);
 
   (version.to_string(), arch.to_string())
+}
+
+/// Get the current version of Node.js.
+/// # Returns
+/// A string, the version number.
+/// (e.g. "v24.2.2")
+pub fn get_current_version() -> String {
+  let Ok(output) = std::process::Command::new("node")
+    .arg("-p")
+    .arg("process.version") // print v24.2.2
+    .output()
+  else {
+    return String::new();
+  };
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+
+  stdout.trim_end().to_string()
 }
 
 /// Get all local installed versions.
@@ -384,11 +556,7 @@ fn get_node_file_url(version: &str, arch: &ArchSpec, base_url: &str) -> String {
 
 fn get_node_mirror(config: &Config) -> String {
   if let Some(mirror) = &config.node_mirror {
-    if !mirror.ends_with('/') {
-      format!("{}/", mirror)
-    } else {
-      mirror.clone()
-    }
+    mirror.to_string()
   } else {
     "https://nodejs.org/dist/".to_string()
   }
@@ -444,7 +612,7 @@ pub fn install_version(
   config: Config,
   version: VersionSpec,
   skip_checksum: bool,
-) -> Result<()> {
+) -> Result {
   let root = get_root(&config)?;
 
   let arch = get_arch();
@@ -526,7 +694,7 @@ where
   bail!("checksum not found: {:?}", package_name);
 }
 
-pub fn list_local_versions(config: Config) -> Result<()> {
+pub fn list_local_versions(config: Config) -> Result {
   let (current_version, current_arch) = get_current_version_and_arch();
   log::debug!("current version: {}({}bit)", current_version, current_arch);
 
@@ -553,7 +721,7 @@ pub fn list_local_versions(config: Config) -> Result<()> {
   Ok(())
 }
 
-pub fn list_remote_versions(config: Config) -> Result<()> {
+pub fn list_remote_versions(config: Config) -> Result {
   // get_release_db appends "index.json" to the mirror base url itself.
   let base_url = get_node_mirror(&config);
   log::debug!("url: {}", base_url);
@@ -591,7 +759,7 @@ pub fn list_remote_versions(config: Config) -> Result<()> {
   Ok(())
 }
 
-pub fn list_versions(config: Config, is_remote_request: bool) -> Result<()> {
+pub fn list_versions(config: Config, is_remote_request: bool) -> Result {
   if is_remote_request {
     list_remote_versions(config)
   } else {
@@ -644,7 +812,7 @@ pub fn log_init() {
 /// # Params
 /// * `link` - 符号路径, 例如 c:\\program files\\nodejs
 /// * `target` - 目标路径, 例如 d:\\nodejs_root\\v18.16.0
-fn reset_junction_link<T, L>(link: T, target: L) -> Result<()>
+fn reset_junction_link<T, L>(link: T, target: L) -> Result
 where
   T: AsRef<Path>,
   L: AsRef<Path>,
@@ -684,7 +852,7 @@ where
   Ok(())
 }
 
-pub fn switch_version(config: Config, version: VersionSpec) -> Result<()> {
+pub fn switch_version(config: Config, version: VersionSpec) -> Result {
   let root = get_root(&config)?;
   let arch = get_arch();
 
@@ -728,7 +896,7 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result<()> {
 //   }
 // }
 
-pub fn uninstall_version(config: Config, version: VersionSpec) -> Result<()> {
+pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
   let root = get_root(&config)?;
   let versions = get_local_versions(&root)?;
   log::debug!("local versions: {:?}", versions);
@@ -798,7 +966,7 @@ where
   Ok((exists, ver))
 }
 
-fn zip_extract<T, R>(source: T, dest: R) -> Result<()>
+fn zip_extract<T, R>(source: T, dest: R) -> Result
 where
   T: AsRef<Path>,
   R: AsRef<Path>,
@@ -823,6 +991,67 @@ where
   Ok(())
 }
 
+// unsafe extern "system" {
+//   fn SendMessageTimeoutW(
+//     hwnd: isize,
+//     msg: u32,
+//     wparam: usize,
+//     lparam: isize,
+//     flags: u32,
+//     timeout: u32,
+//     result: *mut usize,
+//   ) -> isize;
+// }
+
+// /// 广播环境变量变更通知
+// pub fn broadcast_env_change() -> io::Result<()> {
+//   use std::os::windows::ffi::OsStrExt;
+
+//   // "Environment" 转为宽字符串（含终止符）
+//   let wide: Vec<u16> = std::ffi::OsStr::new("Environment")
+//     .encode_wide()
+//     .chain(std::iter::once(0))
+//     .collect();
+
+//   let mut result: usize = 0;
+
+//   log::debug!("broadcast env change");
+
+//   let ret = unsafe {
+//     SendMessageTimeoutW(
+//       0xFFFF, //HWND_BROADCAST,
+//       0x001A, //WM_SETTINGCHANGE,
+//       0,
+//       wide.as_ptr() as isize,
+//       0x0002, //SMTO_ABORTIFHUNG,
+//       5000,   // 5秒超时，防止某个窗口卡死阻塞
+//       &mut result,
+//     )
+//   };
+
+//   if ret == 0 {
+//     Err(io::Error::last_os_error())
+//   } else {
+//     Ok(())
+//   }
+// }
+
+fn update_environment(symlink: impl AsRef<Path>) -> Result {
+  let symlink = symlink.as_ref().to_string_lossy().to_string();
+  let root = RegKey::predef(HKEY_CURRENT_USER);
+  let (env, _) = root.create_subkey("Environment")?;
+  env.set_value("NVM_SYMLINK", &symlink)?;
+
+  // let root = RegKey::predef(HKEY_LOCAL_MACHINE);
+  // let (env, _) = root.create_subkey(
+  //   r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+  // )?;
+  // env.set_value("NVM_SYMLINK_TEST", &symlink)?;
+  // broadcast_env_change()?;
+
+  Ok(())
+}
+
 #[cfg(test)]
 mod test {
   use super::*;
@@ -835,7 +1064,7 @@ mod test {
     config.root = Some(PathBuf::from("nvmroot"));
     // config.arch = Some(ArchSpec::X64);
     config.node_mirror =
-      Some("https://npmmirror.com/mirrors/node/".to_string());
+      Some(Url::parse("https://npmmirror.com/mirrors/node/").unwrap());
 
     config
   }
