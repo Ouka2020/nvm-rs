@@ -22,11 +22,11 @@ Download the latest binary from [GitHub Releases](https://github.com/Ouka2020/nv
 ## Quick start
 
 ```sh
+# First-time setup (interactive prompt for symlink path)
+nvm setup
+
 # Set the root directory where Node.js versions will be stored
 nvm root D:\nodejs
-
-# Set the symlink path (add to your environment variables)
-#   NVM_SYMLINK=C:\Program Files\nodejs
 
 # Install the latest version
 nvm install latest
@@ -51,22 +51,28 @@ nvm uninstall 22.5.0
 
 | Command | Alias | Description |
 |---|---|---|
-| `nvm install <version> [arch] [--insecure]` | `i` | Install a Node.js version. `version` can be `latest`, `lts`, or a semver. `arch` can be `32` or `64` (defaults to system arch). `--insecure` skips SSL validation. |
+| `nvm setup` | | Interactive first-time setup (configures symlink path via prompt). |
+| `nvm install <version> [--skip]` | `i` | Install a Node.js version. `version` can be `latest`, `lts`, or a semver. `--skip` skips checksum validation. Architecture is auto-detected. |
 | `nvm uninstall <version>` | `un` | Uninstall a specific version. |
 | `nvm list [--available]` | `ls` | List installed versions, or remote versions with `--available`. |
 | `nvm on` | | Enable Node.js version management (creates junction link to the latest installed version). |
 | `nvm off` | | Disable Node.js version management (removes junction link). |
 | `nvm root [path]` | | Set or display the root directory. |
-| `nvm arch` | | Show the current architecture. |
-| `nvm proxy [url]` | | Set a proxy for downloads. Use `none` to remove. |
 | `nvm current` | | Display the active Node.js version. |
 | `nvm node-mirror [url]` | | Set or display the Node.js download mirror. |
 | `nvm npm-mirror [url]` | | Set or display the npm download mirror. |
-| `nvm use <version> [arch]` | | Switch to a specific version. |
+| `nvm use <version>` | | Switch to a specific version. Architecture is auto-detected. |
+
+### Deprecated commands
+
+| Command | Status |
+|---|---|
+| `nvm arch` | Removed — architecture is auto-detected. |
+| `nvm proxy [url]` | Removed — proxy is deprecated. |
 
 ## Configuration
 
-The configuration file is stored next to the `nvm.exe` binary. The format depends on the enabled feature:
+The configuration file is stored in the user's preference directory (via the `directories` crate, typically `%APPDATA%\nvm\`). The format depends on the enabled feature:
 
 - **YAML** (default): `settings.txt`
 - **TOML**: `settings.toml`
@@ -76,12 +82,10 @@ The configuration file is stored next to the `nvm.exe` binary. The format depend
 | Field | Description |
 |---|---|
 | `root` | Directory where Node.js versions are stored. |
-| `proxy` | Proxy URL for downloads. Set to `none` to disable. |
-| `node_mirror` | Node.js download mirror. Defaults to `https://nodejs.org/dist`. |
-| `npm_mirror` | npm download mirror. Defaults to `https://registry.npmjs.org`. |
-| `arch` | Default architecture (`32` or `64`). |
-| `originalpath` | Previous symlink target (for restoring). |
-| `originalversion` | Previous version (for restoring). |
+| `node_mirror` | Node.js download mirror URL. Defaults to `https://nodejs.org/dist/`. |
+| `npm_mirror` | npm download mirror URL. |
+| `originalpath` | _(deprecated)_ Previous symlink target. |
+| `originalversion` | _(deprecated)_ Previous version. |
 
 ### Environment variables
 
@@ -95,9 +99,8 @@ The crate uses Cargo feature flags to customize the build:
 
 | Feature | Default | Description |
 |---|---|---|
-| `default` | yes | Enables `ureq` + `yaml`. |
-| `ureq` | (part of default) | Uses `ureq` as the HTTP client. |
-| `yaml` | (part of default) | Uses YAML-format config (`settings.txt`). |
+| `default` | yes | Enables `yaml` config format. |
+| `yaml` | (part of default) | Uses YAML-format config (`settings.txt` via `noyalib`). |
 | `toml` | no | Uses TOML-format config (`settings.toml`). |
 | `debug` | no | Enables `tracing` logging to console and rotating log files. |
 

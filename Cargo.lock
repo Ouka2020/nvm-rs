@@ -1163,6 +1163,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "normpath"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b11ce00d2594068e8a27c9146fdc5cf9f3ac38eb42c7cd34d05fea618873ac9f"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "noyalib"
 version = "0.0.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1218,6 +1227,7 @@ dependencies = [
  "inquire",
  "junction",
  "log",
+ "normpath",
  "noyalib",
  "path-clean",
  "pretty_assertions",

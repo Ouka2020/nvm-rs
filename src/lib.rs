@@ -10,11 +10,12 @@ use comfy_table::{Cell, CellAlignment, Table, presets};
 use indicatif::{ProgressBar, ProgressStyle};
 use inquire::validator::Validation;
 use path_clean::PathClean;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use url::Url;
 use winreg::{
-  RegKey,
-  enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
+  RegKey, RegValue,
+  enums::{HKEY_CURRENT_USER, RegType},
+  types::ToRegValue,
 };
 use zip::ZipArchive;
 
@@ -150,7 +151,7 @@ where
 }
 
 pub fn display_current() -> Result {
-  let (current_version, _) = get_current_version_and_arch();
+  let current_version = get_current_version();
   if !current_version.is_empty() {
     println!("current version is {}", current_version);
   } else {
@@ -168,7 +169,7 @@ pub fn display_or_update_npm_mirror(
     config.npm_mirror = Some(url);
     config.save()?;
   } else if let Some(npm_mirror) = config.npm_mirror {
-    println!("Current NpmMirror: {:?}", npm_mirror);
+    println!("Current NpmMirror: {}", npm_mirror);
   } else {
     println!("No NpmMirror set.");
   }
@@ -336,7 +337,7 @@ pub fn setup(mut config: Config) -> Result {
   log::debug!("config: {:?}", config);
   config.save()?;
 
-  println!("Done. Please restart the console to update the environment.");
+  println!("Finished. Please restart the console to update the environment.");
 
   Ok(())
 }
@@ -345,16 +346,26 @@ type ValidatorResult =
   core::result::Result<Validation, Box<dyn core::error::Error + Send + Sync>>;
 
 fn symlink_validator(value: &str) -> ValidatorResult {
-  let path = std::path::Path::new(value.trim());
-  if path.exists() {
+  // let path = std::path::Path::new(value.trim());
+  // if path.exists() {
+  //   return Ok(Validation::Invalid("The symlink already exists.".into()));
+  // }
+
+  // if let Some(_) = path.extension() {
+  //   return Ok(Validation::Invalid(
+  //     "The symlink path must be a directory.".into(),
+  //   ));
+
+  if matches!(std::fs::symlink_metadata(value.trim()), Ok(_)) {
     return Ok(Validation::Invalid(
-      "The symbolic link already exists.".into(),
+      "The symlink or directory already exists.".into(),
     ));
   }
 
+  let path = std::path::Path::new(value.trim());
   if let Some(_) = path.extension() {
     return Ok(Validation::Invalid(
-      "The symbolic link path must be a directory.".into(),
+      "The symlink path must be a directory.".into(),
     ));
   }
 
@@ -365,9 +376,7 @@ fn node_store_root_validator(value: &str) -> ValidatorResult {
   let path = std::path::Path::new(value.trim());
 
   if let Some(_) = path.extension() {
-    return Ok(Validation::Invalid(
-      "The symbolic link path must be a directory.".into(),
-    ));
+    return Ok(Validation::Invalid("Must be a directory.".into()));
   }
 
   if !path.exists() {
@@ -695,28 +704,31 @@ where
 }
 
 pub fn list_local_versions(config: Config) -> Result {
-  let (current_version, current_arch) = get_current_version_and_arch();
-  log::debug!("current version: {}({}bit)", current_version, current_arch);
+  let current_version = get_current_version();
+  if !current_version.is_empty() {
+    log::debug!("current version: {}", current_version);
+  }
 
   let path = get_root(&config)?;
   let versions = get_local_versions(path)?;
 
-  println!();
-  for version in versions {
-    // let version = version.strip_prefix('v').unwrap_or(version);
-    log::debug!("found version: {version}");
+  if versions.is_empty() {
+    println!("No versions are installed.");
+  } else {
+    println!();
 
-    if version == current_version {
-      println!(
-        "  * {} (Currently using {}-bit executable)",
-        version, current_arch
-      );
-    } else {
-      println!("    {}", version);
+    for version in versions {
+      // let version = version.strip_prefix('v').unwrap_or(version);
+      log::debug!("found version: {version}");
+
+      print!("    {}", version);
+      if version == current_version {
+        println!(" <- In use");
+      }
     }
-  }
 
-  println!();
+    println!();
+  }
 
   Ok(())
 }
@@ -1041,6 +1053,35 @@ fn update_environment(symlink: impl AsRef<Path>) -> Result {
   let root = RegKey::predef(HKEY_CURRENT_USER);
   let (env, _) = root.create_subkey("Environment")?;
   env.set_value("NVM_SYMLINK", &symlink)?;
+  let mut path: String = env.get_value("Path")?;
+
+  log::debug!("Environment Path: {}", path);
+  let regex = RegexBuilder::new(r"%NVM_SYMLINK%")
+    .case_insensitive(true)
+    .build()?;
+
+  if regex.is_match(&path) {
+    log::debug!("NVM_SYMLINK is already in Path");
+  } else {
+    log::debug!("NVM_SYMLINK is not in Path");
+
+    if !path.ends_with(r";") {
+      path.push_str(r";%NVM_SYMLINK%;");
+    } else {
+      path.push_str(r"%NVM_SYMLINK%;");
+    }
+
+    let bytes = path
+      .encode_utf16()
+      .chain(std::iter::once(0))
+      .flat_map(|c| c.to_ne_bytes())
+      .collect();
+    let value = RegValue {
+      vtype: RegType::REG_EXPAND_SZ,
+      bytes,
+    };
+    env.set_raw_value("Path", &value)?;
+  }
 
   // let root = RegKey::predef(HKEY_LOCAL_MACHINE);
   // let (env, _) = root.create_subkey(
