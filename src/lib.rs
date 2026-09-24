@@ -15,7 +15,6 @@ use url::Url;
 use winreg::{
   RegKey, RegValue,
   enums::{HKEY_CURRENT_USER, RegType},
-  types::ToRegValue,
 };
 use zip::ZipArchive;
 
@@ -346,24 +345,14 @@ type ValidatorResult =
   core::result::Result<Validation, Box<dyn core::error::Error + Send + Sync>>;
 
 fn symlink_validator(value: &str) -> ValidatorResult {
-  // let path = std::path::Path::new(value.trim());
-  // if path.exists() {
-  //   return Ok(Validation::Invalid("The symlink already exists.".into()));
-  // }
-
-  // if let Some(_) = path.extension() {
-  //   return Ok(Validation::Invalid(
-  //     "The symlink path must be a directory.".into(),
-  //   ));
-
-  if matches!(std::fs::symlink_metadata(value.trim()), Ok(_)) {
+  if std::fs::symlink_metadata(value.trim()).is_ok() {
     return Ok(Validation::Invalid(
       "The symlink or directory already exists.".into(),
     ));
   }
 
   let path = std::path::Path::new(value.trim());
-  if let Some(_) = path.extension() {
+  if path.extension().is_some() {
     return Ok(Validation::Invalid(
       "The symlink path must be a directory.".into(),
     ));
@@ -375,7 +364,7 @@ fn symlink_validator(value: &str) -> ValidatorResult {
 fn node_store_root_validator(value: &str) -> ValidatorResult {
   let path = std::path::Path::new(value.trim());
 
-  if let Some(_) = path.extension() {
+  if path.extension().is_some() {
     return Ok(Validation::Invalid("Must be a directory.".into()));
   }
 

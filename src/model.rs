@@ -152,6 +152,11 @@ pub enum ArchSpec {
   // #[value(name = "arm64")]
   #[strum(to_string = "arm64")]
   Arm64,
+  /// 32 bit<br>
+  /// Since v23.0.0, not supported on Windows.
+  // #[value(name = "32")]
+  #[strum(to_string = "x86")]
+  X86,
 }
 
 #[derive(Debug, Clone)]
@@ -341,8 +346,16 @@ where
 #[cfg(any(feature = "toml", feature = "yaml"))]
 const CONFIG_FILE_NAME: &str = "settings";
 
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub enum ConfigType {
+  #[default]
+  Toml,
+  Yaml,
+}
+
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct Config {
   /// Node.js storage root
   pub root: Option<PathBuf>,
@@ -374,6 +387,7 @@ pub struct Config {
     note = "originalversion is deprecated, maybe deleted in future"
   )]
   pub originalversion: Option<String>,
+  ty: ConfigType,
 }
 
 fn deserialize_mirror<'de, D>(
@@ -417,14 +431,14 @@ impl Config {
 
     #[cfg(feature = "toml")]
     {
-      if let Some(config) = read_from_toml(&current_dir) {
+      if let Some(config) = read_from_toml(current_dir) {
         return Ok(config);
       }
     }
 
     #[cfg(feature = "yaml")]
     {
-      if let Some(config) = read_from_txt(&current_dir) {
+      if let Some(config) = read_from_txt(current_dir) {
         return Ok(config);
       }
     }
@@ -457,16 +471,21 @@ impl Config {
   }
 
   pub fn is_valid(&self) -> Result {
-    if let Some(root) = &self.root
-      && !root.is_dir()
-    {
-      bail!("root is not a directory");
-    }
+    // let s = std::fs::metadata(&self.root)?;
 
-    if let Some(originalpath) = &self.originalpath
-      && !originalpath.is_dir()
-    {
-      bail!("originalpath is not a directory");
+    match &self.root {
+      Some(root) => {
+        if !root.is_dir() {
+          bail!(
+            "Config item `root` is not a valid directory.\nTips: Use `nvm setup` to initialize it."
+          );
+        }
+      }
+      None => {
+        bail!(
+          "Config item `root` is not set.\nTips: Use `nvm setup` to initialize it."
+        );
+      }
     }
 
     Ok(())
@@ -506,19 +525,15 @@ where
   };
 
   match noyalib::from_str::<Config>(&data) {
-    Ok(config) => Some(config),
+    Ok(mut config) => {
+      config.ty = ConfigType::Yaml;
+      Some(config)
+    }
     Err(e) => {
       log::warn!("failed to parse {}: {}", file_path.display(), e);
       None
     }
   }
-
-  // let Ok(config) = noyalib::from_str::<Config>(&data) else {
-  //   log::warn!("failed to parse {}:", file_path.display());
-  //   return None;
-  // };
-
-  // Some(config)
 }
 
 #[cfg(test)]

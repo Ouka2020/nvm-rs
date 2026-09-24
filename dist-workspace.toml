@@ -17,7 +17,7 @@ ci = "github"
 # The installers to generate for each app
 installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["x86_64-pc-windows-msvc"]
+targets = ["aarch64-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Whether to install an updater program
