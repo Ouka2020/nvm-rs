@@ -25,11 +25,11 @@ pub enum VersionSpec {
   Lts,
   /// Latest version
   Latest,
-  /// Exact semver version number.(eg: 1.1.0)
+  /// Exact semver version number.(eg: v1.1.0)
   Exact(String),
 }
 
-// Clap 通过 FromStr 自动将其作为 value_parser
+// Clap automatically derives a value_parser for it using the FromStr trait.
 impl std::str::FromStr for VersionSpec {
   type Err = String;
 
@@ -51,20 +51,12 @@ impl std::str::FromStr for VersionSpec {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-  /// The version can be a specific version, "latest" for the latest current version, or "lts" for the
-  /// most recent LTS version. Optionally specify whether to install the 32 or 64 bit version (defaults
-  /// to system arch). Set [arch] to "all" to install 32 AND 64 bit versions.
-  /// Add --insecure to the end of this command to bypass SSL validation of the remote download server.
+  /// Install the target node version.
   #[command(visible_alias = "i")]
   Install {
     /// The version can be a specific version, "latest" for the latest current version, or "lts" for the
     /// most recent LTS version. [possible values: <semver>(eg: 1.1.0), lts, latest]
     version: VersionSpec,
-    // /// Specify whether to install the 32 or 64 bit version (defaults to system arch).
-    // /// # deprecated
-    // /// automatically by system arch.
-    // #[deprecated(note = "automatically system arch")]
-    // arch: Option<ArchSpec>,
     /// Skip validation of the downloaded file.
     #[arg(short, long, default_value_t = false)]
     skip: bool,
@@ -80,7 +72,7 @@ pub enum Commands {
   List {
     /// Show online available versions.
     #[arg(short, long, default_value_t = false)]
-    available: bool,
+    remote: bool,
   },
   /// Enable node.js version management.
   On,
@@ -92,20 +84,6 @@ pub enum Commands {
     /// The path to set as the root directory.
     path: Option<String>,
   },
-  // /// Show if node is running in 32 or 64 bit mode.
-  // /// # deprecated
-  // /// automatically by system arch.
-  // #[deprecated(note = "automatically system arch")]
-  // Arch,
-  // /// Set a proxy to use for downloads.
-  // /// # deprecated
-  // /// automatically by system detect.
-  // #[deprecated(note = "automatically system detect")]
-  // Proxy {
-  //   /// Leave [url] blank to see the current proxy.
-  //   /// Set [url] to "none" to remove the proxy.
-  //   url: Option<String>,
-  // },
   /// Display active version.
   Current,
   /// Set the node mirror. Defaults to https://nodejs.org/dist/. Leave [url] blank to use default url.
@@ -160,9 +138,6 @@ pub enum ArchSpec {
 }
 
 #[derive(Debug, Clone)]
-// #[serde(untagged)]
-// 字段负载仅用于反序列化时区分变体，业务上只判断变体形状
-#[allow(dead_code)]
 pub enum LtsSpec {
   Codename(String),
   NotLts,

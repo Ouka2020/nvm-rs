@@ -1,7 +1,7 @@
 use clap::Parser;
 use nvm_windows::model::{CliArgs, Commands, Config};
 use nvm_windows::{
-  Result, activate_version, deactivate_version, display_current,
+  Result, activate_symlink, deactivate_symlink, display_current,
   display_or_update_node_mirror, display_or_update_npm_mirror,
   display_or_update_root, install_version, list_versions, setup,
   switch_version, uninstall_version,
@@ -18,7 +18,9 @@ fn main() -> Result<()> {
   log::debug!("args: {:?}", args);
   let config = Config::load()?;
   log::debug!("config: {:?}", config);
-  config.is_valid()?;
+  if !matches!(args.command, Commands::Setup) {
+    config.is_valid()?;
+  }
 
   match args.command {
     Commands::Setup => setup(config)?,
@@ -27,12 +29,10 @@ fn main() -> Result<()> {
       skip: insecure,
     } => install_version(config, version, insecure)?,
     Commands::Uninstall { version } => uninstall_version(config, version)?,
-    Commands::List { available } => list_versions(config, available)?,
-    Commands::On => activate_version(config)?,
-    Commands::Off => deactivate_version()?,
+    Commands::List { remote: available } => list_versions(config, available)?,
+    Commands::On => activate_symlink(config)?,
+    Commands::Off => deactivate_symlink()?,
     Commands::Root { path } => display_or_update_root(config, path)?,
-    // Commands::Arch => display_architecture(config)?,
-    // Commands::Proxy { url } => display_or_update_proxy(config, url)?,
     Commands::Current => display_current()?,
     Commands::NodeMirror { url } => display_or_update_node_mirror(config, url)?,
     Commands::NpmMirror { url } => display_or_update_npm_mirror(config, url)?,

@@ -1,7 +1,7 @@
 use std::{
-  env,
+  env::{self},
   fs::{self, File},
-  io::{self, BufReader, Read},
+  io::{self, BufReader, Read, Seek},
   path::{Path, PathBuf},
 };
 
@@ -49,6 +49,7 @@ static PROJECT_DIR: LazyLock<directories::ProjectDirs> = LazyLock::new(|| {
   dir
 });
 
+// todo: 配置超时时间
 // static HTTP_CLIENT: LazyLock<ureq::Agent> =
 //   LazyLock::new(|| ureq::Agent::config_builder().timeout_global(Some(Duration::from_mins(mins))));
 
@@ -56,12 +57,13 @@ const LIST_COUNT: usize = 20;
 
 pub type Result<T = ()> = anyhow::Result<T>;
 
-pub fn activate_version(config: Config) -> Result {
+pub fn activate_symlink(config: Config) -> Result {
   let symlink = get_nvm_symlink()?;
   if let Ok(metadata) = fs::symlink_metadata(&symlink)
     && metadata.is_symlink()
   {
-    bail!("node is already activated");
+    println!("node is already activated.");
+    return Ok(());
   }
 
   let root = get_root(&config)?;
@@ -72,7 +74,7 @@ pub fn activate_version(config: Config) -> Result {
 
   create_junction_link(symlink, root.join(last))?;
 
-  println!("node is activated.");
+  println!("node {} is activated.", last);
 
   Ok(())
 }
@@ -95,10 +97,11 @@ where
   Ok(())
 }
 
-pub fn deactivate_version() -> Result {
+pub fn deactivate_symlink() -> Result {
   let symlink = get_nvm_symlink()?;
   let Ok(_) = fs::symlink_metadata(&symlink) else {
-    bail!("node is already deactivated");
+    println!("node is already deactivated.");
+    return Ok(());
   };
 
   delete_junction_link(symlink)?;
@@ -130,31 +133,37 @@ fn delete_version(root: &Path, ver: &str) -> Result {
   Ok(())
 }
 
-fn delete_zip_files<T>(root: T) -> Result
-where
-  T: AsRef<Path>,
-{
-  let root = root.as_ref();
-  for entry in fs::read_dir(root)? {
-    let entry = entry?;
-    if entry.file_type()?.is_file()
-      && let Some(e) = entry.path().extension()
-      && e == "zip"
-    {
-      let file_path = entry.path();
-      log::debug!("delete zip file: {}", file_path.display());
-      fs::remove_file(file_path)?;
-    }
-  }
-  Ok(())
-}
+// fn delete_zip_files<T>(root: T) -> Result
+// where
+//   T: AsRef<Path>,
+// {
+//   let root = root.as_ref();
+//   for entry in fs::read_dir(root)? {
+//     let entry = entry?;
+//     if entry.file_type()?.is_file()
+//       && let Some(e) = entry.path().extension()
+//       && e == "zip"
+//     {
+//       let file_path = entry.path();
+//       log::debug!("delete zip file: {}", file_path.display());
+//       fs::remove_file(file_path)?;
+//     }
+//   }
+//   Ok(())
+// }
 
 pub fn display_current() -> Result {
   let current_version = get_current_version();
   if !current_version.is_empty() {
     println!("current version is {}", current_version);
   } else {
-    println!("No current version. Run 'nvm use x.x.x' to set a version.");
+    println!("No current version.");
+    println!();
+    println!("Tips:");
+    println!(" * Run 'nvm use x.x.x' to set a version.");
+    println!(" * Run 'nvm ls' to list available versions locally.");
+    println!(" * Run 'nvm ls --remote' to list available versions online.");
+    println!(" * Run 'nvm install latest' to install the latest version.");
   }
 
   Ok(())
@@ -236,17 +245,16 @@ where
   Ok(())
 }
 
-pub fn download_file<U, D>(url: U, dest: D) -> Result
+fn download_file<U>(url: U, dest: &mut File) -> Result
 where
   U: AsRef<str>,
-  D: AsRef<Path>,
 {
   let url = url.as_ref();
-  let dest = dest.as_ref();
-  // 1. 发起请求
+  // let dest = dest.as_ref();
+  // 1. send request
   let mut resp = ureq::get(url).call()?;
 
-  // 2. 获取文件大小（如果服务器提供了 Content-Length）
+  // 2. get Content-Length header
   let total_size = resp
     .headers()
     .get("Content-Length")
@@ -254,7 +262,7 @@ where
     .and_then(|s| s.parse::<u64>().ok())
     .unwrap_or(0);
 
-  // 3. 创建进度条
+  // 3. create progress bar
   let pb = if total_size > 0 {
     let pb = ProgressBar::new(total_size);
     pb.set_style(
@@ -264,7 +272,7 @@ where
         );
     pb
   } else {
-    // 未知大小时使用 spinner
+    // 4. unknown size, use progress spinner
     let pb = ProgressBar::new_spinner();
     pb.set_style(
       ProgressStyle::default_spinner()
@@ -273,26 +281,74 @@ where
     pb
   };
 
-  // 4. 用 ProgressReader 包装 response body
+  // 4. wrap response body
   let reader = resp.body_mut().as_reader();
   let mut progress_reader = pb.wrap_read(reader);
 
-  // 5. 写入文件（每次 read/write 都会自动更新进度条）
-  let mut file = File::create(dest)?;
-  io::copy(&mut progress_reader, &mut file)?;
+  // 5. write to file
+  io::copy(&mut progress_reader, dest)?;
 
-  // 6. 完成
+  // 6. complete
   pb.finish_with_message("Download complete!");
   Ok(())
 }
 
-fn file_validate<T>(path: T, sha256_checksum: &str) -> Result<bool>
-where
-  T: AsRef<Path>,
-{
+// fn download_file<U, D>(url: U, dest: D) -> Result
+// where
+//   U: AsRef<str>,
+//   D: AsRef<Path>,
+// {
+//   let url = url.as_ref();
+//   let dest = dest.as_ref();
+//   // 1. 发起请求
+//   let mut resp = ureq::get(url).call()?;
+
+//   // 2. 获取文件大小（如果服务器提供了 Content-Length）
+//   let total_size = resp
+//     .headers()
+//     .get("Content-Length")
+//     .and_then(|v| v.to_str().ok())
+//     .and_then(|s| s.parse::<u64>().ok())
+//     .unwrap_or(0);
+
+//   // 3. 创建进度条
+//   let pb = if total_size > 0 {
+//     let pb = ProgressBar::new(total_size);
+//     pb.set_style(
+//             ProgressStyle::default_bar()
+//                 .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
+//                 .progress_chars("#>-"),
+//         );
+//     pb
+//   } else {
+//     // 未知大小时使用 spinner
+//     let pb = ProgressBar::new_spinner();
+//     pb.set_style(
+//       ProgressStyle::default_spinner()
+//         .template("{spinner:.green} [{elapsed_precise}] {bytes} downloaded")?,
+//     );
+//     pb
+//   };
+
+//   // 4. 用 ProgressReader 包装 response body
+//   let reader = resp.body_mut().as_reader();
+//   let mut progress_reader = pb.wrap_read(reader);
+
+//   // 5. 写入文件（每次 read/write 都会自动更新进度条）
+//   let mut file = File::create(dest)?;
+//   io::copy(&mut progress_reader, &mut file)?;
+
+//   // 6. 完成
+//   pb.finish_with_message("Download complete!");
+//   Ok(())
+// }
+
+fn file_validate(file: &File, sha256_checksum: &str) -> Result<bool> {
   use sha2::Digest;
 
-  let file = std::fs::File::open(path)?;
+  let mut file = file.try_clone()?;
+  file.rewind()?;
+
   let mut reader = BufReader::with_capacity(256 * 1024, file);
   let mut hasher = sha2::Sha256::new();
   let mut buf = [0u8; 64 * 1024];
@@ -468,6 +524,7 @@ fn mirror_prompt(
 /// # Returns
 /// A tuple of strings, the first string is the version number, the second string is the architecture.
 /// (e.g. "v24.2.2", "64")
+#[deprecated = "use get_current_version() and get_current_arch() instead"]
 pub fn get_current_version_and_arch() -> (String, String) {
   let Ok(output) = std::process::Command::new("node")
     .arg("-p")
@@ -629,32 +686,41 @@ pub fn install_version(
   log::debug!("download url: {}", url);
 
   let root = root.as_path();
+  // full file name: node-vX.Y.Z-win-x64.zip
   let Some(file_name) = Path::new(&url).file_name() else {
     bail!("invalid download url: {url}");
   };
-  let zip_path = root.join(file_name);
+  // let zip_path = root.join(file_name);
+  let mut zip_path = tempfile::tempfile()?;
 
-  download_file(&url, &zip_path)?;
+  download_file(&url, &mut zip_path)?;
 
+  print!("checksum...");
   if !skip_checksum {
+    // zip_path.seek(SeekFrom::Start(0)).unwrap();
     let url = get_node_file_checksum_url(&ver, &base_url);
     let checksum = load_checksum(&url, &ver, &arch)?;
     let valid = file_validate(&zip_path, &checksum)?;
     if !valid {
-      bail!("sha256 checksum failed: {:?}", file_name);
+      println!("failed.");
+      let msg = format!("sha256 checksum failed: {:?}", file_name);
+      log::error!("{}", msg);
+      bail!(msg);
     }
 
-    println!("checksum valid.");
+    println!("OK.");
+  } else {
+    println!("skip.");
   }
 
-  zip_extract(zip_path, root)?;
+  zip_extract(&zip_path, root)?;
 
-  let org_path = root.join(Path::new(file_name).with_extension(""));
+  let org_path = root.join(file_name).with_extension("");
   let dist_path = root.join(&ver);
   log::debug!("rename {:?} -> {:?}", org_path, dist_path);
   fs::rename(org_path, dist_path)?;
 
-  delete_zip_files(root)?;
+  // delete_zip_files(root)?;
 
   println!("install {} completed.", ver);
 
@@ -713,6 +779,8 @@ pub fn list_local_versions(config: Config) -> Result {
       print!("    {}", version);
       if version == current_version {
         println!(" <- In use");
+      } else {
+        println!();
       }
     }
 
@@ -861,7 +929,7 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
 
   let db = get_release_db(&base_url)?;
   let (exists, ver) = version_exists(&db, &version, &root)?;
-  let (current_ver, _) = get_current_version_and_arch();
+  let current_ver = get_current_version();
   if !exists {
     bail!("version {:?} not installed", ver);
   }
@@ -912,7 +980,7 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
       if !versions.contains(&ver) {
         bail!("version {:?} not installed", ver);
       }
-      if get_current_version_and_arch().0 == ver {
+      if get_current_version() == ver {
         bail!("version {:?} is in use, can not uninstall it", ver);
       }
 
@@ -951,7 +1019,6 @@ where
         bail!("No LTS version found.")
       }
     }
-    // todo: 修改为 v1.1.0 格式, 而不是 1.1.0
     VersionSpec::Exact(s) => {
       if db.version_exists(s) {
         s.clone()
@@ -967,12 +1034,12 @@ where
   Ok((exists, ver))
 }
 
-fn zip_extract<T, R>(source: T, dest: R) -> Result
+fn zip_extract<D>(source: &File, dest: D) -> Result
 where
-  T: AsRef<Path>,
-  R: AsRef<Path>,
+  D: AsRef<Path>,
 {
-  let file = std::fs::File::open(source)?;
+  let mut file = source.try_clone()?;
+  file.rewind()?;
   let reader = BufReader::new(file);
   let mut archive = ZipArchive::new(reader)?;
   let pb = ProgressBar::new(archive.len() as u64);
@@ -991,51 +1058,6 @@ where
   log::debug!("extract done");
   Ok(())
 }
-
-// unsafe extern "system" {
-//   fn SendMessageTimeoutW(
-//     hwnd: isize,
-//     msg: u32,
-//     wparam: usize,
-//     lparam: isize,
-//     flags: u32,
-//     timeout: u32,
-//     result: *mut usize,
-//   ) -> isize;
-// }
-
-// /// 广播环境变量变更通知
-// pub fn broadcast_env_change() -> io::Result<()> {
-//   use std::os::windows::ffi::OsStrExt;
-
-//   // "Environment" 转为宽字符串（含终止符）
-//   let wide: Vec<u16> = std::ffi::OsStr::new("Environment")
-//     .encode_wide()
-//     .chain(std::iter::once(0))
-//     .collect();
-
-//   let mut result: usize = 0;
-
-//   log::debug!("broadcast env change");
-
-//   let ret = unsafe {
-//     SendMessageTimeoutW(
-//       0xFFFF, //HWND_BROADCAST,
-//       0x001A, //WM_SETTINGCHANGE,
-//       0,
-//       wide.as_ptr() as isize,
-//       0x0002, //SMTO_ABORTIFHUNG,
-//       5000,   // 5秒超时，防止某个窗口卡死阻塞
-//       &mut result,
-//     )
-//   };
-
-//   if ret == 0 {
-//     Err(io::Error::last_os_error())
-//   } else {
-//     Ok(())
-//   }
-// }
 
 fn update_environment(symlink: impl AsRef<Path>) -> Result {
   let symlink = symlink.as_ref().to_string_lossy().to_string();
@@ -1071,13 +1093,6 @@ fn update_environment(symlink: impl AsRef<Path>) -> Result {
     };
     env.set_raw_value("Path", &value)?;
   }
-
-  // let root = RegKey::predef(HKEY_LOCAL_MACHINE);
-  // let (env, _) = root.create_subkey(
-  //   r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-  // )?;
-  // env.set_value("NVM_SYMLINK_TEST", &symlink)?;
-  // broadcast_env_change()?;
 
   Ok(())
 }
@@ -1135,10 +1150,9 @@ mod test {
   }
 
   #[rstest]
-  fn get_current_version_and_arch_test() {
-    let (current_ver, arch) = get_current_version_and_arch();
+  fn get_current_version_test() {
+    let current_ver = get_current_version();
     assert_eq!(current_ver.starts_with('v'), true);
-    assert_eq!(arch == "64", true);
   }
 
   #[rstest]
@@ -1148,8 +1162,8 @@ mod test {
 
   #[rstest]
   fn deactivate_and_activate_version_test(config: Config) {
-    assert_eq!(deactivate_version().is_ok(), true);
-    assert_eq!(activate_version(config.clone()).is_ok(), true);
+    assert_eq!(deactivate_symlink().is_ok(), true);
+    assert_eq!(activate_symlink(config.clone()).is_ok(), true);
   }
 
   #[rstest]
