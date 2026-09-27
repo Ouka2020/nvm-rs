@@ -1,7 +1,9 @@
 use std::{
   env::{self},
+  ffi::c_void,
   fs::{self, File},
   io::{self, BufReader, Read, Seek},
+  os::windows::ffi::OsStrExt,
   path::{Path, PathBuf},
 };
 
@@ -12,6 +14,10 @@ use inquire::validator::Validation;
 use path_clean::PathClean;
 use regex::{Regex, RegexBuilder};
 use url::Url;
+use windows_sys::Win32::Storage::FileSystem::{
+  GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO,
+  VerQueryValueW,
+};
 use winreg::{
   RegKey, RegValue,
   enums::{HKEY_CURRENT_USER, RegType},
@@ -153,8 +159,7 @@ fn delete_version(root: &Path, ver: &str) -> Result {
 // }
 
 pub fn display_current() -> Result {
-  let current_version = get_current_version();
-  if !current_version.is_empty() {
+  if let Some(current_version) = get_current_version() {
     println!("current version is {}", current_version);
   } else {
     println!("No current version.");
@@ -520,52 +525,79 @@ fn mirror_prompt(
   Ok(mirror_url)
 }
 
-/// Get the current version and architecture of Node.js.
-/// # Returns
-/// A tuple of strings, the first string is the version number, the second string is the architecture.
-/// (e.g. "v24.2.2", "64")
-#[deprecated = "use get_current_version() and get_current_arch() instead"]
-pub fn get_current_version_and_arch() -> (String, String) {
-  let Ok(output) = std::process::Command::new("node")
-    .arg("-p")
-    .arg("`${process.version},${process.arch}`") // print v24.2.2,x64
-    .output()
-  else {
-    return (String::new(), String::new());
-  };
-
-  let stdout = String::from_utf8_lossy(&output.stdout);
-  let mut parts = stdout.trim_end().split(',');
-
-  let Some(version) = parts.next() else {
-    return (String::new(), String::new());
-  };
-  let arch = match parts.next() {
-    Some("x64") => "64",
-    Some(_) => "32",
-    None => return (String::new(), String::new()),
-  };
-  log::debug!("version: {}", version);
-
-  (version.to_string(), arch.to_string())
-}
-
 /// Get the current version of Node.js.
 /// # Returns
 /// A string, the version number.
 /// (e.g. "v24.2.2")
-pub fn get_current_version() -> String {
-  let Ok(output) = std::process::Command::new("node")
-    .arg("-p")
-    .arg("process.version") // print v24.2.2
-    .output()
-  else {
-    return String::new();
+pub fn get_current_version() -> Option<String> {
+  let Ok(symlink) = get_nvm_symlink() else {
+    return None;
   };
+  // 1. Convert the path to a wide string (null-terminated).
+  let wide_path: Vec<u16> = symlink
+    .join("node.exe")
+    .as_os_str()
+    .encode_wide()
+    .chain(std::iter::once(0))
+    .collect();
 
-  let stdout = String::from_utf8_lossy(&output.stdout);
+  // 2. Get the version info buffer size.
+  // SAFETY: wide_path is valid (null-terminated).
+  let size = unsafe {
+    GetFileVersionInfoSizeW(wide_path.as_ptr(), std::ptr::null_mut())
+  };
+  if size == 0 {
+    return None; // File does not exist or has no version resource
+  }
 
-  stdout.trim_end().to_string()
+  // 3. Allocate buffer and read version info.
+  let mut buffer: Vec<u8> = vec![0u8; size as usize];
+  // SAFETY: buffer length >= size, wide_path is valid (null-terminated).
+  let ok = unsafe {
+    GetFileVersionInfoW(
+      wide_path.as_ptr(),
+      0,
+      size,
+      buffer.as_mut_ptr() as *mut c_void,
+    )
+  };
+  if ok == 0 {
+    return None;
+  }
+
+  // 4. Query the root block "\" to get VS_FIXEDFILEINFO.
+  let query: Vec<u16> = "\\".encode_utf16().chain(std::iter::once(0)).collect();
+  let mut info_ptr: *const VS_FIXEDFILEINFO = std::ptr::null();
+  let mut info_len: u32 = 0;
+
+  // SAFETY: Buffer contains valid version data; query is a valid wide string.
+  let found = unsafe {
+    VerQueryValueW(
+      buffer.as_ptr() as *const c_void,
+      query.as_ptr(),
+      &mut info_ptr as *mut _ as *mut *mut c_void,
+      &mut info_len,
+    )
+  };
+  if found == 0
+    || info_ptr.is_null()
+    || info_len < std::mem::size_of::<VS_FIXEDFILEINFO>() as u32
+  {
+    return None;
+  }
+
+  // 5. Extract version number from VS_FIXEDFILEINFO.
+  // SAFETY: info_ptr points to a valid VS_FIXEDFILEINFO struct.
+  let ffi = unsafe { &*info_ptr };
+
+  let version = format!(
+    "v{}.{}.{}",
+    ffi.dwFileVersionMS >> 16,
+    ffi.dwFileVersionMS & 0xFFFF,
+    ffi.dwFileVersionLS >> 16
+  );
+
+  Some(version)
 }
 
 /// Get all local installed versions.
@@ -618,20 +650,27 @@ fn get_node_mirror(config: &Config) -> String {
 }
 
 fn get_nvm_symlink() -> Result<PathBuf> {
-  Ok(env::var("NVM_SYMLINK")?.into())
-}
-
-pub fn get_arch() -> ArchSpec {
-  match env::var("PROCESSOR_ARCHITECTURE") {
-    // Ok(val) if val.eq_ignore_ascii_case("AMD64") => ArchSpec::X64,
-    Ok(val) if val.eq_ignore_ascii_case("ARM64") => ArchSpec::Arm64,
-    Ok(_) => ArchSpec::X64,
+  match env::var("NVM_SYMLINK") {
+    Ok(path) => Ok(path.into()),
     Err(e) => {
-      log::error!("get processor architecture failed: {:?}", e);
-      ArchSpec::X64
+      log::error!("get nvm symlink failed: {:?}", e);
+      bail!("get nvm symlink failed. use 'nvm setup' to set it up.");
     }
   }
 }
+
+// #[deprecated = "use get_current_arch() instead"]
+// pub fn get_arch() -> ArchSpec {
+//   match env::var("PROCESSOR_ARCHITECTURE") {
+//     // Ok(val) if val.eq_ignore_ascii_case("AMD64") => ArchSpec::X64,
+//     Ok(val) if val.eq_ignore_ascii_case("ARM64") => ArchSpec::Arm64,
+//     Ok(_) => ArchSpec::X64,
+//     Err(e) => {
+//       log::error!("get processor architecture failed: {:?}", e);
+//       ArchSpec::X64
+//     }
+//   }
+// }
 
 fn get_release_db<T>(base_url: T) -> Result<ReleaseDatabase>
 where
@@ -670,7 +709,7 @@ pub fn install_version(
 ) -> Result {
   let root = get_root(&config)?;
 
-  let arch = get_arch();
+  let arch = ArchSpec::get_from_machine();
   log::debug!("install: {:?} {}", version, arch);
   // tips(&arch);
 
@@ -691,6 +730,7 @@ pub fn install_version(
     bail!("invalid download url: {url}");
   };
   // let zip_path = root.join(file_name);
+  // todo: use temp file to download zip file
   let mut zip_path = tempfile::tempfile()?;
 
   download_file(&url, &mut zip_path)?;
@@ -759,32 +799,30 @@ where
 }
 
 pub fn list_local_versions(config: Config) -> Result {
-  let current_version = get_current_version();
-  if !current_version.is_empty() {
+  if let Some(current_version) = get_current_version() {
     log::debug!("current version: {}", current_version);
-  }
 
-  let path = get_root(&config)?;
-  let versions = get_local_versions(path)?;
+    let path = get_root(&config)?;
+    let versions = get_local_versions(path)?;
 
-  if versions.is_empty() {
-    println!("No versions are installed.");
-  } else {
-    println!();
+    if versions.is_empty() {
+      println!("No versions are installed.");
+    } else {
+      println!();
 
-    for version in versions {
-      // let version = version.strip_prefix('v').unwrap_or(version);
-      log::debug!("found version: {version}");
+      for version in versions {
+        log::debug!("found version: {version}");
 
-      print!("    {}", version);
-      if version == current_version {
-        println!(" <- In use");
-      } else {
-        println!();
+        print!("    {}", version);
+        if version == current_version {
+          println!(" <- In use");
+        } else {
+          println!();
+        }
       }
-    }
 
-    println!();
+      println!();
+    }
   }
 
   Ok(())
@@ -923,7 +961,7 @@ where
 
 pub fn switch_version(config: Config, version: VersionSpec) -> Result {
   let root = get_root(&config)?;
-  let arch = get_arch();
+  let arch = ArchSpec::get_from_machine();
 
   let base_url = get_node_mirror(&config);
 
@@ -933,7 +971,9 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
   if !exists {
     bail!("version {:?} not installed", ver);
   }
-  if current_ver == ver {
+  if let Some(current_ver) = current_ver
+    && current_ver == ver
+  {
     bail!("version {:?} is already used", ver);
   }
 
@@ -980,7 +1020,9 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
       if !versions.contains(&ver) {
         bail!("version {:?} not installed", ver);
       }
-      if get_current_version() == ver {
+      if let Some(current_ver) = get_current_version()
+        && current_ver == ver
+      {
         bail!("version {:?} is in use, can not uninstall it", ver);
       }
 
@@ -1152,7 +1194,7 @@ mod test {
   #[rstest]
   fn get_current_version_test() {
     let current_ver = get_current_version();
-    assert_eq!(current_ver.starts_with('v'), true);
+    assert_eq!(current_ver.is_some(), true);
   }
 
   #[rstest]

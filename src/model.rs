@@ -3,14 +3,26 @@ use crate::PROJECT_DIR;
 use super::Result;
 use anyhow::bail;
 use derive_more::Deref;
+use num_enum::FromPrimitive;
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
+use windows_sys::Win32::System::SystemInformation::{
+  GetNativeSystemInfo, IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_AMD64,
+  IMAGE_FILE_MACHINE_ARM64, IMAGE_FILE_MACHINE_I386,
+  PROCESSOR_ARCHITECTURE_AMD64, PROCESSOR_ARCHITECTURE_ARM64,
+  PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_INFO,
+};
+use windows_sys::Win32::System::Threading::{
+  GetCurrentProcess, IsWow64Process2,
+};
+use winreg::RegKey;
+use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -112,29 +124,63 @@ pub enum Commands {
   Setup,
 }
 
-#[derive(Clone, Debug, ValueEnum, Display, Deserialize, PartialEq)]
-// #[repr(u8)]
+#[derive(Clone, Debug, Display, PartialEq, FromPrimitive)]
+#[repr(u16)]
 pub enum ArchSpec {
-  // /// 32 bit<br>
-  // /// Since v23.0.0, not supported on Windows.
-  // // #[value(name = "32")]
-  // #[strum(to_string = "x86")]
-  // X86,
+  #[num_enum(default)]
+  Unknown = 0,
   /// 64 bit<br>
+  // Since v0.6.13, supported on Windows.<br>
   /// it is suggested to use 64 bit version.
-  // #[value(name = "64")]
   #[strum(to_string = "x64")]
-  X64,
+  X64 = IMAGE_FILE_MACHINE_AMD64,
   /// 64 bit ARM<br>
-  /// Since v19.9.0, supported on Windows.
-  // #[value(name = "arm64")]
+  // Since v19.9.0, supported on Windows.
   #[strum(to_string = "arm64")]
-  Arm64,
+  Arm64 = IMAGE_FILE_MACHINE_ARM64,
   /// 32 bit<br>
-  /// Since v23.0.0, not supported on Windows.
-  // #[value(name = "32")]
+  // Since v0.5.1, supported on Windows.<br>
+  /// Since v23.0.0, stop supported on Windows.
   #[strum(to_string = "x86")]
-  X86,
+  X86 = IMAGE_FILE_MACHINE_I386,
+}
+
+impl ArchSpec {
+  pub fn get_from_machine() -> Self {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let Ok(key) = hklm.open_subkey_with_flags(
+      r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+      KEY_READ,
+    ) else {
+      panic!("open subkey failed");
+    };
+
+    unsafe {
+      if key.get_value::<u32, _>("CurrentMajorVersionNumber").is_ok() {
+        // win10+ use IsWow64Process2
+        let mut process_machine: IMAGE_FILE_MACHINE = 0;
+        let mut native_machine: IMAGE_FILE_MACHINE = 0;
+
+        IsWow64Process2(
+          GetCurrentProcess(),
+          &mut process_machine,
+          &mut native_machine,
+        );
+
+        ArchSpec::from(native_machine)
+      } else {
+        // win10- use GetNativeSystemInfo
+        let mut sys_info: SYSTEM_INFO = std::mem::zeroed();
+        GetNativeSystemInfo(&mut sys_info);
+        match sys_info.Anonymous.Anonymous.wProcessorArchitecture {
+          PROCESSOR_ARCHITECTURE_AMD64 => ArchSpec::X64,
+          PROCESSOR_ARCHITECTURE_ARM64 => ArchSpec::Arm64,
+          PROCESSOR_ARCHITECTURE_INTEL => ArchSpec::X86,
+          _ => ArchSpec::Unknown,
+        }
+      }
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
