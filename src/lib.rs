@@ -85,10 +85,10 @@ pub fn activate_symlink(config: Config) -> Result {
   Ok(())
 }
 
-/// 创建符号链接
+/// Create a junction link
 /// # Params
-/// * `link` - 符号路径, 例如 c:\\program files\\nodejs
-/// * `target` - 目标路径, 例如 d:\\nodejs_root\\v18.16.0
+/// * `link` - The symlink path, e.g. c:\\program files\\nodejs
+/// * `target` - The target path, e.g. d:\\nodejs_root\\v18.16.0
 fn create_junction_link<T, L>(link: T, target: L) -> Result
 where
   T: AsRef<Path>,
@@ -123,7 +123,7 @@ where
 {
   let path = link.as_ref();
   log::debug!("delete link: {:?}", path);
-  // 链接可能本来就不存在，忽略删除失败
+  // The link might not exist, so ignore failed deletion.
   if let Err(e) = fs::remove_dir(path) {
     log::debug!("remove_dir failed: {e}");
   }
@@ -138,25 +138,6 @@ fn delete_version(root: &Path, ver: &str) -> Result {
 
   Ok(())
 }
-
-// fn delete_zip_files<T>(root: T) -> Result
-// where
-//   T: AsRef<Path>,
-// {
-//   let root = root.as_ref();
-//   for entry in fs::read_dir(root)? {
-//     let entry = entry?;
-//     if entry.file_type()?.is_file()
-//       && let Some(e) = entry.path().extension()
-//       && e == "zip"
-//     {
-//       let file_path = entry.path();
-//       log::debug!("delete zip file: {}", file_path.display());
-//       fs::remove_file(file_path)?;
-//     }
-//   }
-//   Ok(())
-// }
 
 pub fn display_current() -> Result {
   if let Some(current_version) = get_current_version() {
@@ -205,26 +186,6 @@ pub fn display_or_update_node_mirror(
 
   Ok(())
 }
-
-// pub fn display_or_update_proxy(
-//   mut config: Config,
-//   url: Option<String>,
-// ) -> Result<()> {
-//   if let Some(url) = url {
-//     config.proxy = if url.eq_ignore_ascii_case("none") {
-//       None
-//     } else {
-//       Some(url)
-//     };
-//     config.save()?;
-//   } else if let Some(proxy) = config.proxy {
-//     println!("Current Proxy: {:?}", proxy);
-//   } else {
-//     println!("No Proxy set.");
-//   }
-
-//   Ok(())
-// }
 
 pub fn display_or_update_root<T>(mut config: Config, path: Option<T>) -> Result
 where
@@ -298,56 +259,6 @@ where
   Ok(())
 }
 
-// fn download_file<U, D>(url: U, dest: D) -> Result
-// where
-//   U: AsRef<str>,
-//   D: AsRef<Path>,
-// {
-//   let url = url.as_ref();
-//   let dest = dest.as_ref();
-//   // 1. 发起请求
-//   let mut resp = ureq::get(url).call()?;
-
-//   // 2. 获取文件大小（如果服务器提供了 Content-Length）
-//   let total_size = resp
-//     .headers()
-//     .get("Content-Length")
-//     .and_then(|v| v.to_str().ok())
-//     .and_then(|s| s.parse::<u64>().ok())
-//     .unwrap_or(0);
-
-//   // 3. 创建进度条
-//   let pb = if total_size > 0 {
-//     let pb = ProgressBar::new(total_size);
-//     pb.set_style(
-//             ProgressStyle::default_bar()
-//                 .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
-//                 .progress_chars("#>-"),
-//         );
-//     pb
-//   } else {
-//     // 未知大小时使用 spinner
-//     let pb = ProgressBar::new_spinner();
-//     pb.set_style(
-//       ProgressStyle::default_spinner()
-//         .template("{spinner:.green} [{elapsed_precise}] {bytes} downloaded")?,
-//     );
-//     pb
-//   };
-
-//   // 4. 用 ProgressReader 包装 response body
-//   let reader = resp.body_mut().as_reader();
-//   let mut progress_reader = pb.wrap_read(reader);
-
-//   // 5. 写入文件（每次 read/write 都会自动更新进度条）
-//   let mut file = File::create(dest)?;
-//   io::copy(&mut progress_reader, &mut file)?;
-
-//   // 6. 完成
-//   pb.finish_with_message("Download complete!");
-//   Ok(())
-// }
-
 fn file_validate(file: &File, sha256_checksum: &str) -> Result<bool> {
   use sha2::Digest;
 
@@ -357,7 +268,7 @@ fn file_validate(file: &File, sha256_checksum: &str) -> Result<bool> {
   let mut reader = BufReader::with_capacity(256 * 1024, file);
   let mut hasher = sha2::Sha256::new();
   let mut buf = [0u8; 64 * 1024];
-  // 读取错误必须向上传播，避免对损坏的半成品文件计算出错误摘要
+
   loop {
     let n = reader.read(&mut buf)?;
     if n == 0 {
@@ -388,7 +299,8 @@ pub fn setup(mut config: Config) -> Result {
 
   let npm_mirror = npm_mirror_prompt()?;
 
-  config.root = Some(PathBuf::from(node_store_root));
+  std::fs::create_dir_all(&node_store_root)?;
+  config.root = Some(node_store_root.into());
   config.node_mirror = Some(url::Url::parse(&node_mirror)?);
   config.npm_mirror = Some(url::Url::parse(&npm_mirror)?);
 
@@ -406,11 +318,11 @@ type ValidatorResult =
   core::result::Result<Validation, Box<dyn core::error::Error + Send + Sync>>;
 
 fn symlink_validator(value: &str) -> ValidatorResult {
-  if std::fs::symlink_metadata(value.trim()).is_ok() {
-    return Ok(Validation::Invalid(
-      "The symlink or directory already exists.".into(),
-    ));
-  }
+  // if std::fs::symlink_metadata(value.trim()).is_ok() {
+  //   return Ok(Validation::Invalid(
+  //     "The symlink or directory already exists.".into(),
+  //   ));
+  // }
 
   let path = std::path::Path::new(value.trim());
   if path.extension().is_some() {
@@ -427,16 +339,6 @@ fn node_store_root_validator(value: &str) -> ValidatorResult {
 
   if path.extension().is_some() {
     return Ok(Validation::Invalid("Must be a directory.".into()));
-  }
-
-  if !path.exists() {
-    log::debug!(
-      "node store root directory is not exist. create it: {:?}",
-      path
-    );
-    std::fs::create_dir_all(path).map_err(|e| {
-      anyhow::anyhow!("failed to create node store root directory: {:?}", e)
-    })?;
   }
 
   Ok(Validation::Valid)
@@ -505,11 +407,11 @@ fn mirror_prompt(
   select_prompt: &str,
   text_prompt: &str,
 ) -> Result<String> {
-  // 预分配容量，避免重新分配内存
+  // Pre-allocate capacity to avoid reallocation
   options.reserve(2);
-  // 在头部插入 "none"
+  // Insert "none" at the head
   options.insert(0, "none");
-  // 在尾部追加 "custom"
+  // Append "custom" at the tail
   options.push("custom");
 
   let mirror = inquire::Select::new(select_prompt, options).prompt()?;
@@ -784,7 +686,7 @@ where
 
   let package_name = format!("node-{}-win-{}.zip", version, arch);
   for line in text_data.lines() {
-    // SHASUMS256.txt: "<64位哈希>  node-vX.Y.Z-win-x64.zip"
+    // SHASUMS256.txt: "<64-bit hash>  node-vX.Y.Z-win-x64.zip"
     let mut parts = line.split_ascii_whitespace();
     let (Some(checksum), Some(name)) = (parts.next(), parts.next()) else {
       continue;
@@ -799,30 +701,29 @@ where
 }
 
 pub fn list_local_versions(config: Config) -> Result {
-  if let Some(current_version) = get_current_version() {
-    log::debug!("current version: {}", current_version);
+  let current_version = get_current_version().unwrap_or("".to_string());
+  log::debug!("current version: {}", current_version);
 
-    let path = get_root(&config)?;
-    let versions = get_local_versions(path)?;
+  let path = get_root(&config)?;
+  let versions = get_local_versions(path)?;
 
-    if versions.is_empty() {
-      println!("No versions are installed.");
-    } else {
-      println!();
+  if versions.is_empty() {
+    println!("No versions are installed.");
+  } else {
+    println!();
 
-      for version in versions {
-        log::debug!("found version: {version}");
+    for version in versions {
+      log::debug!("found version: {version}");
 
-        print!("    {}", version);
-        if version == current_version {
-          println!(" <- In use");
-        } else {
-          println!();
-        }
+      print!("    {}", version);
+      if version == current_version {
+        println!(" <- In use");
+      } else {
+        println!();
       }
-
-      println!();
     }
+
+    println!();
   }
 
   Ok(())
@@ -876,7 +777,7 @@ pub fn list_versions(config: Config, is_remote_request: bool) -> Result {
 
 #[cfg(feature = "debug")]
 pub fn log_init() {
-  // 1. 滚动文件 Appender（按天轮转，保留30天）
+  // 1. Rolling file appender (daily rotation, retain 30 days)
   std::fs::create_dir_all("./logs").expect("failed to create logs directory");
   let file_appender = RollingFileAppender::builder()
     .rotation(Rotation::DAILY)
@@ -886,21 +787,21 @@ pub fn log_init() {
     .build("./logs")
     .expect("failed to create rolling file appender");
 
-  // 非阻塞写入，避免日志I/O阻塞主线程
+  // Non-blocking write to avoid log I/O blocking the main thread
   let (non_blocking_file, guard) =
     tracing_appender::non_blocking(file_appender);
 
-  // ✅ 将 guard 存入全局静态变量，确保活到程序结束
+  // Store `guard` in a global static to keep it alive until program exit
   LOG_GUARD.set(guard).expect("logging already initialized");
 
-  // 2. 构建 Layer
-  // 控制台：彩色、人类可读、INFO 级别以上
+  // 2. Build layers
+  // Console: colored, human-readable, INFO and above
   let console_layer = fmt::layer()
     .with_writer(std::io::stderr)
     .pretty()
     .with_filter(EnvFilter::new(LOG_FILTER));
 
-  // 文件：无颜色、带时间戳、DEBUG 级别以上（记录更详细）
+  // File: no color, with timestamps, DEBUG and above (more detailed)
   let file_layer = fmt::layer()
     .with_writer(non_blocking_file)
     .with_ansi(false)
@@ -908,17 +809,17 @@ pub fn log_init() {
     .with_line_number(true)
     .with_filter(EnvFilter::new(LOG_FILTER));
 
-  // 3. 组合并初始化
+  // 3. Combine and initialize
   tracing_subscriber::registry()
     .with(console_layer)
     .with(file_layer)
     .init();
 }
 
-/// 重置符号链接
+/// Reset a junction link
 /// # Params
-/// * `link` - 符号路径, 例如 c:\\program files\\nodejs
-/// * `target` - 目标路径, 例如 d:\\nodejs_root\\v18.16.0
+/// * `link` - The symlink path, e.g. c:\\program files\\nodejs
+/// * `target` - The target path, e.g. d:\\nodejs_root\\v18.16.0
 fn reset_junction_link<T, L>(link: T, target: L) -> Result
 where
   T: AsRef<Path>,
@@ -942,7 +843,7 @@ where
 
   let dest_dir = dest.as_ref();
 
-  // 防止 Zip Slip：解压后的路径必须仍在目标目录内
+  // Prevent Zip Slip: extracted path must remain within the destination directory
   let out_path = dest_dir.join(entry.mangled_name());
   if !out_path.starts_with(dest_dir) {
     bail!("illegal path in archive: {}", entry.name());
@@ -977,7 +878,7 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
     bail!("version {:?} is already used", ver);
   }
 
-  // // 提示用户使用 64 位版本
+  // // Prompt user to use 64-bit version
   // tips(&arch);
 
   log::debug!("ready switch to {:?}({})", version, arch);
@@ -991,10 +892,10 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
   Ok(())
 }
 
-// /// 提示<br>
-// /// 如果使用的是 32 位版本, 则提示用户使用 64 位版本
+// /// Prompt<br>
+// /// If using a 32-bit version, prompt the user to use the 64-bit version
 // /// # Params
-// /// * `arch` - 架构, 例如 x64, x86
+// /// * `arch` - Architecture, e.g. x64, x86
 // /// # Returns
 // /// * `()`
 // fn tips(arch: &ArchSpec) {
@@ -1035,9 +936,9 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
   Ok(())
 }
 
-/// 检查服务器上的版本是否存在, 如果不存在则报错<br>
-/// 检查本地是否存在该版本的目录<br>
-/// 如果存在则返回版本号, 例如 v1.1.0
+/// Check if the version exists on the server; error if not.<br>
+/// Check if the version directory exists locally.<br>
+/// Returns the version string if it exists, e.g. v1.1.0
 fn version_exists<T>(
   db: &ReleaseDatabase,
   version: &VersionSpec,

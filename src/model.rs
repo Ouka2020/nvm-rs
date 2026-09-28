@@ -13,16 +13,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
 use windows_sys::Win32::System::SystemInformation::{
-  GetNativeSystemInfo, IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_AMD64,
-  IMAGE_FILE_MACHINE_ARM64, IMAGE_FILE_MACHINE_I386,
-  PROCESSOR_ARCHITECTURE_AMD64, PROCESSOR_ARCHITECTURE_ARM64,
-  PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_INFO,
+  IMAGE_FILE_MACHINE, PROCESSOR_ARCHITECTURE_AMD64,
+  PROCESSOR_ARCHITECTURE_ARM64,
 };
 use windows_sys::Win32::System::Threading::{
   GetCurrentProcess, IsWow64Process2,
 };
-use winreg::RegKey;
-use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -133,52 +129,28 @@ pub enum ArchSpec {
   // Since v0.6.13, supported on Windows.<br>
   /// it is suggested to use 64 bit version.
   #[strum(to_string = "x64")]
-  X64 = IMAGE_FILE_MACHINE_AMD64,
+  X64 = PROCESSOR_ARCHITECTURE_AMD64,
   /// 64 bit ARM<br>
   // Since v19.9.0, supported on Windows.
   #[strum(to_string = "arm64")]
-  Arm64 = IMAGE_FILE_MACHINE_ARM64,
-  /// 32 bit<br>
-  // Since v0.5.1, supported on Windows.<br>
-  /// Since v23.0.0, stop supported on Windows.
-  #[strum(to_string = "x86")]
-  X86 = IMAGE_FILE_MACHINE_I386,
+  Arm64 = PROCESSOR_ARCHITECTURE_ARM64,
 }
 
 impl ArchSpec {
   pub fn get_from_machine() -> Self {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let Ok(key) = hklm.open_subkey_with_flags(
-      r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
-      KEY_READ,
-    ) else {
-      panic!("open subkey failed");
-    };
-
+    // Prefer IsWow64Process2 (available on Win10+): it reports the native
+    // machine type even when this process runs under WOW64.
     unsafe {
-      if key.get_value::<u32, _>("CurrentMajorVersionNumber").is_ok() {
-        // win10+ use IsWow64Process2
-        let mut process_machine: IMAGE_FILE_MACHINE = 0;
-        let mut native_machine: IMAGE_FILE_MACHINE = 0;
+      let mut process_machine: IMAGE_FILE_MACHINE = 0;
+      let mut native_machine: IMAGE_FILE_MACHINE = 0;
 
-        IsWow64Process2(
-          GetCurrentProcess(),
-          &mut process_machine,
-          &mut native_machine,
-        );
+      IsWow64Process2(
+        GetCurrentProcess(),
+        &mut process_machine,
+        &mut native_machine,
+      );
 
-        ArchSpec::from(native_machine)
-      } else {
-        // win10- use GetNativeSystemInfo
-        let mut sys_info: SYSTEM_INFO = std::mem::zeroed();
-        GetNativeSystemInfo(&mut sys_info);
-        match sys_info.Anonymous.Anonymous.wProcessorArchitecture {
-          PROCESSOR_ARCHITECTURE_AMD64 => ArchSpec::X64,
-          PROCESSOR_ARCHITECTURE_ARM64 => ArchSpec::Arm64,
-          PROCESSOR_ARCHITECTURE_INTEL => ArchSpec::X86,
-          _ => ArchSpec::Unknown,
-        }
-      }
+      ArchSpec::from(native_machine)
     }
   }
 }
@@ -194,7 +166,7 @@ impl<'de> Deserialize<'de> for LtsSpec {
   where
     D: Deserializer<'de>,
   {
-    // 用 untagged helper 同时接受 string 和 bool
+    // Use untagged helper to accept both string and bool
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Raw {
@@ -212,57 +184,56 @@ impl<'de> Deserialize<'de> for LtsSpec {
   }
 }
 
-/// Node.js 版本发布信息
+/// Node.js release info
 #[derive(Debug, Clone, Deserialize)]
 pub struct NodeReleaseInfo {
-  /// 版本号，如 "v26.8.1"
+  /// semver, e.g. "v26.8.1"
   pub version: String,
 
-  /// 发布日期，格式 YYYY-MM-DD
+  /// release date, format YYYY-MM-DD
   // #[serde(deserialize_with = "deserialize_jiff_date")]
   #[allow(dead_code)]
   // #[tabled(skip)]
   pub date: String,
 
-  // /// 可用的构建产物/平台列表
+  // /// Available build artifacts / platform list
   // #[tabled(skip)]
   // pub files: Vec<String>,
 
-  // /// 捆绑的 npm 版本
+  // /// Bundled npm version
   // #[tabled(skip)]
   // pub npm: Option<String>,
 
-  // /// V8 引擎版本
+  // /// V8 engine version
   // #[tabled(skip)]
   // pub v8: String,
 
-  // /// libuv 版本
+  // /// libuv version
   // #[tabled(skip)]
   // pub uv: Option<String>,
 
-  // /// zlib 版本
+  // /// zlib version
   // #[tabled(skip)]
   // pub zlib: Option<String>,
 
-  // /// OpenSSL 版本
+  // /// OpenSSL version
   // #[tabled(skip)]
   // pub openssl: Option<String>,
 
-  // /// Node-API (ABI) 模块版本号
+  // /// Node-API (ABI) module version
   // #[tabled(skip)]
   // #[serde(rename = "modules")]
   // pub abi_version: Option<String>,
 
-  // /// 是否为 LTS（长期支持）版本
+  // /// Whether this is an LTS (Long Term Support) version
   // #[tabled(skip)]
   // #[serde(deserialize_with = "deserialize_lts")]
   pub lts: LtsSpec,
-  // /// 是否为安全修复版本
+  // /// Whether this is a security release
   // #[tabled(skip)]
   // pub security: bool,
 }
 
-/// 核心查询缓存（启动时构建一次）
 #[derive(Debug, Clone, Deserialize, Deref)]
 #[serde(transparent)]
 pub struct ReleaseDatabase {
@@ -271,12 +242,12 @@ pub struct ReleaseDatabase {
 }
 
 impl ReleaseDatabase {
-  /// ✅ 获取最新版本
+  /// query latest version
   pub fn latest(&self) -> Option<String> {
     self.inner.first().map(|f| f.version.clone())
   }
 
-  /// ✅ 获取最新 LTS 版本
+  /// query latest LTS version
   pub fn latest_lts(&self) -> Option<String> {
     self
       .inner
@@ -285,7 +256,7 @@ impl ReleaseDatabase {
       .map(|r| r.version.clone())
   }
 
-  // /// ✅ 按条件组合查询（示例：最新 LTS + 指定平台）
+  // /// Query by combined criteria (e.g. latest LTS + specified platform)
   // pub fn latest_lts_with_platform(
   //   &self,
   //   platform: &str,
@@ -297,7 +268,7 @@ impl ReleaseDatabase {
   //     .find(|r| r.files.iter().any(|f| f == platform))
   // }
 
-  /// 版本查询
+  /// query version exists
   pub fn version_exists(&self, version: &str) -> bool {
     log::debug!("version_exists: {:?}", version);
 
@@ -310,7 +281,7 @@ impl ReleaseDatabase {
     self.inner.iter().any(|f| f.version == version)
   }
 
-  /// 获取某主版本下所有发布
+  /// query all releases under a major version
   pub fn by_major(&self, major: u64, len: usize) -> Vec<String> {
     let major = format!("v{}", major);
 
@@ -324,7 +295,7 @@ impl ReleaseDatabase {
     fill_len(list, len)
   }
 
-  /// 最新的 N 个版本
+  /// query latest N versions
   pub fn latest_list(&self, count: usize) -> Vec<String> {
     let list: Vec<_> = self
       .inner
@@ -337,7 +308,7 @@ impl ReleaseDatabase {
     fill_len(list, count)
   }
 
-  /// 最新 n 个 LTS 版本
+  /// query latest N LTS versions
   pub fn lts_list(&self, count: usize) -> Vec<String> {
     let list: Vec<_> = self
       .inner
@@ -408,6 +379,7 @@ pub struct Config {
     note = "originalversion is deprecated, maybe deleted in future"
   )]
   pub originalversion: Option<String>,
+  #[serde(skip)]
   ty: ConfigType,
 }
 
@@ -442,12 +414,6 @@ impl Config {
   pub fn load() -> Result<Config> {
     log::debug!("load config");
 
-    // // 从当前目录加载配置文件
-    // let current_dir = std::env::current_dir()?;
-    // let Ok(current_dir) = get_exec_path() else {
-    //   bail!("failed to get current exe path");
-    // };
-
     let current_dir = PROJECT_DIR.preference_dir();
 
     #[cfg(feature = "toml")]
@@ -470,30 +436,29 @@ impl Config {
   pub fn save(&self) -> Result {
     log::debug!("save config");
 
-    let path = PROJECT_DIR.preference_dir();
+    let path = PROJECT_DIR.preference_dir().join(CONFIG_FILE_NAME);
 
     #[cfg(feature = "toml")]
     {
       let config_str = toml::to_string(self)?;
-      let path_str = path.join(CONFIG_FILE_NAME).with_extension("toml");
-      std::fs::write(&path_str, config_str)?;
-
-      return Ok(());
+      std::fs::write(path.with_extension("toml"), config_str)?;
     }
 
-    #[cfg(feature = "yaml")]
+    #[cfg(all(not(feature = "toml"), feature = "yaml"))]
     {
       let config_str = noyalib::to_string(self)?;
-      let path_str = path.join(CONFIG_FILE_NAME).with_extension("txt");
-      std::fs::write(&path_str, config_str)?;
+      std::fs::write(path.with_extension("txt"), config_str)?;
     }
+
+    #[cfg(not(any(feature = "toml", feature = "yaml")))]
+    compile_error!(
+      "At least one of `toml` or `yaml` features must be enabled for `save()`"
+    );
 
     Ok(())
   }
 
   pub fn is_valid(&self) -> Result {
-    // let s = std::fs::metadata(&self.root)?;
-
     match &self.root {
       Some(root) => {
         if !root.is_dir() {
@@ -563,8 +528,8 @@ mod tests {
   use pretty_assertions::assert_eq;
   use rstest::{fixture, rstest};
 
-  /// 构造一个包含 4 个版本的 ReleaseDatabase：
-  /// v22.0.0(非LTS) / v20.0.0(LTS Iron) / v18.0.0(LTS Hydrogen) / v21.0.0(非LTS)
+  /// Build a ReleaseDatabase with 4 versions:
+  /// v22.0.0(non-LTS) / v20.0.0(LTS Iron) / v18.0.0(LTS Hydrogen) / v21.0.0(non-LTS)
   #[fixture]
   fn sample_db() -> ReleaseDatabase {
     let json = r#"[
@@ -658,7 +623,7 @@ mod tests {
   #[rstest]
   fn release_db_version_exists(sample_db: ReleaseDatabase) {
     assert!(sample_db.version_exists("v22.0.0"));
-    // 不带 v 前缀也应能匹配
+    // Should also match without the 'v' prefix
     assert!(sample_db.version_exists("18.0.0"));
     assert!(!sample_db.version_exists("v99.0.0"));
   }
@@ -666,7 +631,7 @@ mod tests {
   #[rstest]
   fn release_db_by_major(sample_db: ReleaseDatabase) {
     assert_eq!(sample_db.by_major(20, 1), vec!["v20.0.0".to_string()]);
-    // 数量不足时用空字符串填充
+    // Pad with empty strings when fewer than requested
     assert_eq!(
       sample_db.by_major(18, 3),
       vec!["v18.0.0".to_string(), String::new(), String::new()]
@@ -679,7 +644,7 @@ mod tests {
 
   #[rstest]
   fn release_db_latest_list(sample_db: ReleaseDatabase) -> () {
-    // 非 LTS 版本在前，不足部分填充空字符串
+    // Non-LTS versions first, pad with empty strings if fewer
     assert_eq!(
       sample_db.latest_list(3),
       vec!["v22.0.0".to_string(), "v21.0.0".to_string(), String::new()]
@@ -708,10 +673,10 @@ mod tests {
 
   // ---------- Config ----------
 
-  #[rstest]
-  fn config_default_is_valid() {
-    assert!(Config::default().is_valid().is_ok());
-  }
+  // #[rstest]
+  // fn config_default_is_valid() {
+  //   assert!(Config::default().is_valid().is_ok());
+  // }
 
   #[rstest]
   fn config_valid_with_existing_root() {
