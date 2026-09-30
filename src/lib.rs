@@ -5,6 +5,7 @@ use std::{
   io::{self, BufReader, Read, Seek},
   os::windows::ffi::OsStrExt,
   path::{Path, PathBuf},
+  time::Duration,
 };
 
 use anyhow::bail;
@@ -25,7 +26,6 @@ use winreg::{
 use zip::ZipArchive;
 
 use std::sync::LazyLock;
-#[cfg(feature = "debug")]
 use std::sync::OnceLock;
 #[cfg(feature = "debug")]
 use tracing_appender::{
@@ -42,22 +42,24 @@ use crate::model::{ArchSpec, Config, ReleaseDatabase, VersionSpec};
 pub mod model;
 
 #[cfg(feature = "debug")]
-static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
 
 #[cfg(feature = "debug")]
 const LOG_FILTER: &str = "info,nvm_windows=debug";
 
-static PROJECT_DIR: LazyLock<directories::ProjectDirs> = LazyLock::new(|| {
-  let dir = directories::ProjectDirs::from("", "", "nvm")
-    .expect("fail to load app root.");
-  std::fs::create_dir_all(dir.preference_dir())
-    .expect("fail to create preference dir.");
-  dir
-});
+pub static CURRENT_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub static PROJECT_DIR: OnceLock<directories::ProjectDirs> = OnceLock::new();
 
 // todo: 配置超时时间
-// static HTTP_CLIENT: LazyLock<ureq::Agent> =
-//   LazyLock::new(|| ureq::Agent::config_builder().timeout_global(Some(Duration::from_mins(mins))));
+static HTTP_CLIENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+  let agent_config = ureq::Agent::config_builder()
+    .timeout_global(Some(Duration::from_mins(15)))
+    .timeout_recv_response(Some(Duration::from_mins(1)))
+    .timeout_recv_body(Some(Duration::from_mins(10)))
+    .build();
+  ureq::Agent::new_with_config(agent_config)
+});
 
 const LIST_COUNT: usize = 20;
 
@@ -159,10 +161,12 @@ pub fn display_or_update_npm_mirror(
   mut config: Config,
   url: Option<Url>,
 ) -> Result {
-  if let Some(url) = url {
-    config.npm_mirror = Some(url);
-    config.save()?;
-  } else if let Some(npm_mirror) = config.npm_mirror {
+  if url.is_some() {
+    config.npm_mirror = url;
+    return config.save();
+  }
+
+  if let Some(npm_mirror) = config.npm_mirror {
     println!("Current NpmMirror: {}", npm_mirror);
   } else {
     println!("No NpmMirror set.");
@@ -175,10 +179,12 @@ pub fn display_or_update_node_mirror(
   mut config: Config,
   url: Option<Url>,
 ) -> Result {
-  if let Some(url) = url {
-    config.node_mirror = Some(url);
+  if url.is_some() {
+    config.node_mirror = url;
     config.save()?;
-  } else if let Some(node_mirror) = config.node_mirror {
+  }
+
+  if let Some(node_mirror) = config.node_mirror {
     println!("Current NodeMirror: {}", node_mirror);
   } else {
     println!("No NodeMirror set.");
@@ -218,7 +224,7 @@ where
   let url = url.as_ref();
   // let dest = dest.as_ref();
   // 1. send request
-  let mut resp = ureq::get(url).call()?;
+  let mut resp = HTTP_CLIENT.get(url).call()?;
 
   // 2. get Content-Length header
   let total_size = resp
@@ -290,7 +296,13 @@ pub fn setup(mut config: Config) -> Result {
 
   let node_store_root =
     inquire::Text::new("Which directory to use as the node store root?")
-      .with_default(&PROJECT_DIR.data_local_dir().to_string_lossy())
+      .with_default(
+        &PROJECT_DIR
+          .get()
+          .unwrap()
+          .data_local_dir()
+          .to_string_lossy(),
+      )
       // .with_help_message("Tip: The node store root must not already exist.")
       .with_validator(node_store_root_validator)
       .prompt()?;
@@ -301,8 +313,8 @@ pub fn setup(mut config: Config) -> Result {
 
   std::fs::create_dir_all(&node_store_root)?;
   config.root = Some(node_store_root.into());
-  config.node_mirror = Some(url::Url::parse(&node_mirror)?);
-  config.npm_mirror = Some(url::Url::parse(&npm_mirror)?);
+  config.node_mirror = node_mirror;
+  config.npm_mirror = npm_mirror;
 
   update_environment(link_path)?;
 
@@ -358,7 +370,7 @@ fn url_validator(value: &str) -> ValidatorResult {
   Ok(Validation::Valid)
 }
 
-fn node_mirror_prompt() -> Result<String> {
+fn node_mirror_prompt() -> Result<Option<Url>> {
   let node_mirror_list = vec!["https://npmmirror.com/mirrors/node/"];
 
   mirror_prompt(
@@ -368,7 +380,7 @@ fn node_mirror_prompt() -> Result<String> {
   )
 }
 
-fn npm_mirror_prompt() -> Result<String> {
+fn npm_mirror_prompt() -> Result<Option<Url>> {
   let npm_mirror_list = vec!["https://npmmirror.com/mirrors/npm/"];
 
   mirror_prompt(
@@ -399,14 +411,14 @@ fn npm_mirror_prompt() -> Result<String> {
 ///
 /// # Errors
 ///
-/// * Returns an `Err` variant of `r4::Result` when the user cancels the interaction
+/// * Returns an `Err` variant of `Result` when the user cancels the interaction
 ///   (e.g., by pressing `Ctrl+C` / `Esc`) or when an underlying I/O error occurs.
 ///   The error is typically converted from an `inquire` error.
 fn mirror_prompt(
   mut options: Vec<&'static str>,
   select_prompt: &str,
   text_prompt: &str,
-) -> Result<String> {
+) -> Result<Option<Url>> {
   // Pre-allocate capacity to avoid reallocation
   options.reserve(2);
   // Insert "none" at the head
@@ -415,16 +427,25 @@ fn mirror_prompt(
   options.push("custom");
 
   let mirror = inquire::Select::new(select_prompt, options).prompt()?;
-  if mirror != "custom" {
-    return Ok(mirror.to_string());
+  match mirror {
+    "none" => Ok(None),
+    "custom" => {
+      let mirror_url = inquire::Text::new(text_prompt)
+        // .with_help_message("Tip: The node store root must not already exist.")
+        .with_validator(url_validator)
+        .prompt()?;
+
+      Ok(Some(Url::parse(&mirror_url)?))
+    }
+    s => Ok(Some(Url::parse(s)?)),
   }
 
-  let mirror_url = inquire::Text::new(text_prompt)
-    // .with_help_message("Tip: The node store root must not already exist.")
-    .with_validator(url_validator)
-    .prompt()?;
+  // let mirror_url = inquire::Text::new(text_prompt)
+  //   // .with_help_message("Tip: The node store root must not already exist.")
+  //   .with_validator(url_validator)
+  //   .prompt()?;
 
-  Ok(mirror_url)
+  // Ok(mirror_url)
 }
 
 /// Get the current version of Node.js.
@@ -530,26 +551,29 @@ where
   Ok(versions)
 }
 
-fn get_node_file_checksum_url(version: &str, base_url: &str) -> String {
-  let url = format!("{}/{}/SHASUMS256.txt", base_url, version);
-  log::debug!("url: {:?}", url);
-  url
-}
+// fn get_node_file_checksum_url(base_url: Url, version: &str) -> Url {
+//   let url = get_url(base_url, &[version, "SHASUMS256.txt"]);
+//   log::debug!("url: {:?}", url);
 
-fn get_node_file_url(version: &str, arch: &ArchSpec, base_url: &str) -> String {
-  let url =
-    format!("{}/{}/node-{}-win-{}.zip", base_url, version, version, arch);
-  log::debug!("url: {:?}", url);
-  url
-}
+//   url
+// }
 
-fn get_node_mirror(config: &Config) -> String {
-  if let Some(mirror) = &config.node_mirror {
-    mirror.to_string()
-  } else {
-    "https://nodejs.org/dist/".to_string()
-  }
-}
+// fn get_node_file_url(version: &str, arch: &ArchSpec, base_url: &Url) -> Url {
+//   let url = format!("node-{}-win-{}.zip", version, arch);
+
+//   let url = get_url(base_url, &[version, &url]);
+//   log::debug!("url: {:?}", url);
+
+//   url
+// }
+
+// fn get_node_mirror(config: &Config) -> Url {
+//   if let Some(mirror) = &config.node_mirror {
+//     mirror.clone()
+//   } else {
+//     "https://nodejs.org/dist/".parse().unwrap()
+//   }
+// }
 
 fn get_nvm_symlink() -> Result<PathBuf> {
   match env::var("NVM_SYMLINK") {
@@ -561,41 +585,29 @@ fn get_nvm_symlink() -> Result<PathBuf> {
   }
 }
 
-// #[deprecated = "use get_current_arch() instead"]
-// pub fn get_arch() -> ArchSpec {
-//   match env::var("PROCESSOR_ARCHITECTURE") {
-//     // Ok(val) if val.eq_ignore_ascii_case("AMD64") => ArchSpec::X64,
-//     Ok(val) if val.eq_ignore_ascii_case("ARM64") => ArchSpec::Arm64,
-//     Ok(_) => ArchSpec::X64,
-//     Err(e) => {
-//       log::error!("get processor architecture failed: {:?}", e);
-//       ArchSpec::X64
-//     }
-//   }
+// fn get_release_db<T>(base_url: T) -> Result<ReleaseDatabase>
+// where
+//   T: AsRef<str>,
+// {
+//   let base_url = base_url.as_ref();
+//   log::debug!("base url: {}", base_url);
+
+//   let url: Url = base_url.parse()?;
+//   let target_url = url.join("index.json")?;
+//   log::debug!("target url: {}", target_url);
+
+//   let json_data: ReleaseDatabase = HTTP_CLIENT
+//     .get(target_url.as_str())
+//     .call()?
+//     .body_mut()
+//     .read_json()?;
+//   // log::debug!("body len: {}", body.len());
+
+//   // let release_db: ReleaseDatabase = serde_json::from_str(&body)?;
+//   log::debug!("node_release_info count: {}", json_data.len());
+
+//   Ok(json_data)
 // }
-
-fn get_release_db<T>(base_url: T) -> Result<ReleaseDatabase>
-where
-  T: AsRef<str>,
-{
-  let base_url = base_url.as_ref();
-  log::debug!("base url: {}", base_url);
-
-  let url: Url = base_url.parse()?;
-  let target_url = url.join("index.json")?;
-  log::debug!("target url: {}", target_url);
-
-  let json_data: ReleaseDatabase = ureq::get(target_url.as_str())
-    .call()?
-    .body_mut()
-    .read_json()?;
-  // log::debug!("body len: {}", body.len());
-
-  // let release_db: ReleaseDatabase = serde_json::from_str(&body)?;
-  log::debug!("node_release_info count: {}", json_data.len());
-
-  Ok(json_data)
-}
 
 fn get_root(config: &Config) -> Result<PathBuf> {
   Ok(match &config.root {
@@ -603,6 +615,16 @@ fn get_root(config: &Config) -> Result<PathBuf> {
     None => env::current_dir()?,
   })
 }
+
+// fn get_url(base_url: &Url, paths: &[&str]) -> Url {
+//   let mut index_url = base_url.clone();
+//   {
+//     let mut path = index_url.path_segments_mut().unwrap();
+//     path.extend(paths);
+//   }
+
+//   index_url
+// }
 
 pub fn install_version(
   config: Config,
@@ -613,23 +635,27 @@ pub fn install_version(
 
   let arch = ArchSpec::get_from_machine();
   log::debug!("install: {:?} {}", version, arch);
-  // tips(&arch);
 
-  let base_url = get_node_mirror(&config);
-
-  let db = get_release_db(&base_url)?;
+  let db = ReleaseDatabase::load_from_url(
+    &HTTP_CLIENT,
+    config.get_node_url(&["index.json"]),
+  )?;
   let (exists, ver) = version_exists(&db, &version, &root)?;
   if exists {
     bail!("version {} already installed", ver);
   }
 
-  let url = get_node_file_url(&ver, &arch, &base_url);
+  let url = format!("node-{}-win-{}.zip", ver, arch);
+  let url = config.get_node_url(&[&ver, &url]);
   log::debug!("download url: {}", url);
 
-  let root = root.as_path();
-  // full file name: node-vX.Y.Z-win-x64.zip
-  let Some(file_name) = Path::new(&url).file_name() else {
-    bail!("invalid download url: {url}");
+  // full file name: node-version-win-x64.zip
+  let Some(file_name) = url
+    .path_segments()
+    .and_then(|mut segments| segments.next_back())
+    .filter(|s| !s.is_empty())
+  else {
+    bail!("invalid url: {url}");
   };
   // let zip_path = root.join(file_name);
   // todo: use temp file to download zip file
@@ -639,8 +665,8 @@ pub fn install_version(
 
   print!("checksum...");
   if !skip_checksum {
-    // zip_path.seek(SeekFrom::Start(0)).unwrap();
-    let url = get_node_file_checksum_url(&ver, &base_url);
+    let url = config.get_node_url(&[&ver, "SHASUMS256.txt"]);
+    log::debug!("url: {:?}", url);
     let checksum = load_checksum(&url, &ver, &arch)?;
     let valid = file_validate(&zip_path, &checksum)?;
     if !valid {
@@ -655,10 +681,10 @@ pub fn install_version(
     println!("skip.");
   }
 
-  zip_extract(&zip_path, root)?;
+  zip_extract(&zip_path, &root)?;
 
-  let org_path = root.join(file_name).with_extension("");
-  let dist_path = root.join(&ver);
+  let org_path = &root.join(file_name).with_extension("");
+  let dist_path = &root.join(&ver);
   log::debug!("rename {:?} -> {:?}", org_path, dist_path);
   fs::rename(org_path, dist_path)?;
 
@@ -681,7 +707,11 @@ where
   let base_url = base_url.as_ref();
   let version = version.as_ref();
 
-  let text_data = ureq::get(base_url).call()?.body_mut().read_to_string()?;
+  let text_data = HTTP_CLIENT
+    .get(base_url)
+    .call()?
+    .body_mut()
+    .read_to_string()?;
   log::debug!("body len: {}", text_data.len());
 
   let package_name = format!("node-{}-win-{}.zip", version, arch);
@@ -730,11 +760,10 @@ pub fn list_local_versions(config: Config) -> Result {
 }
 
 pub fn list_remote_versions(config: Config) -> Result {
-  // get_release_db appends "index.json" to the mirror base url itself.
-  let base_url = get_node_mirror(&config);
-  log::debug!("url: {}", base_url);
-
-  let release_database = get_release_db(&base_url)?;
+  let release_database = ReleaseDatabase::load_from_url(
+    &HTTP_CLIENT,
+    config.get_node_url(&["index.json"]),
+  )?;
 
   let latest_version = release_database.latest_list(LIST_COUNT);
 
@@ -758,7 +787,6 @@ pub fn list_remote_versions(config: Config) -> Result {
 
   println!("{}", table);
 
-  //  You can use --full to show all versions.
   println!(
     "\n * Note: The list only shows the latest {} versions. Visit https://nodejs.org/en/ for more info.",
     LIST_COUNT
@@ -864,9 +892,10 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
   let root = get_root(&config)?;
   let arch = ArchSpec::get_from_machine();
 
-  let base_url = get_node_mirror(&config);
-
-  let db = get_release_db(&base_url)?;
+  let db = ReleaseDatabase::load_from_url(
+    &HTTP_CLIENT,
+    config.get_node_url(&["index.json"]),
+  )?;
   let (exists, ver) = version_exists(&db, &version, &root)?;
   let current_ver = get_current_version();
   if !exists {
@@ -878,10 +907,7 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
     bail!("version {:?} is already used", ver);
   }
 
-  // // Prompt user to use 64-bit version
-  // tips(&arch);
-
-  log::debug!("ready switch to {:?}({})", version, arch);
+  log::debug!("ready switch to {}({})", ver, arch);
 
   let node_path = root.join(&ver).clean();
 
@@ -891,20 +917,6 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
 
   Ok(())
 }
-
-// /// Prompt<br>
-// /// If using a 32-bit version, prompt the user to use the 64-bit version
-// /// # Params
-// /// * `arch` - Architecture, e.g. x64, x86
-// /// # Returns
-// /// * `()`
-// fn tips(arch: &ArchSpec) {
-//   if arch == &ArchSpec::X86 {
-//     println!(
-//       "\n* Notice: Since version v23.0.0, 32-bit versions are no longer available. Please use the 64-bit version."
-//     );
-//   }
-// }
 
 pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
   let root = get_root(&config)?;
@@ -1050,25 +1062,10 @@ mod test {
   fn config() -> Config {
     let mut config = Config::default();
     config.root = Some(PathBuf::from("nvmroot"));
-    // config.arch = Some(ArchSpec::X64);
     config.node_mirror =
       Some(Url::parse("https://npmmirror.com/mirrors/node/").unwrap());
 
     config
-  }
-
-  #[rstest]
-  fn get_node_mirror_test(config: Config) {
-    let base_url = get_node_mirror(&config);
-    assert_eq!(base_url, "https://npmmirror.com/mirrors/node/");
-  }
-
-  #[rstest]
-  fn get_release_db_test(config: Config) {
-    let base_url = get_node_mirror(&config);
-    let o_db = get_release_db("https://nodejs.org/dist/").unwrap();
-    let n_db = get_release_db(&base_url).unwrap();
-    assert_eq!(o_db.len(), n_db.len());
   }
 
   #[rstest]

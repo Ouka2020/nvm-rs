@@ -13,8 +13,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
 use windows_sys::Win32::System::SystemInformation::{
-  IMAGE_FILE_MACHINE, PROCESSOR_ARCHITECTURE_AMD64,
-  PROCESSOR_ARCHITECTURE_ARM64,
+  IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64,
 };
 use windows_sys::Win32::System::Threading::{
   GetCurrentProcess, IsWow64Process2,
@@ -129,17 +128,18 @@ pub enum ArchSpec {
   // Since v0.6.13, supported on Windows.<br>
   /// it is suggested to use 64 bit version.
   #[strum(to_string = "x64")]
-  X64 = PROCESSOR_ARCHITECTURE_AMD64,
+  X64 = IMAGE_FILE_MACHINE_AMD64,
   /// 64 bit ARM<br>
   // Since v19.9.0, supported on Windows.
   #[strum(to_string = "arm64")]
-  Arm64 = PROCESSOR_ARCHITECTURE_ARM64,
+  Arm64 = IMAGE_FILE_MACHINE_ARM64,
 }
 
 impl ArchSpec {
   pub fn get_from_machine() -> Self {
     // Prefer IsWow64Process2 (available on Win10+): it reports the native
     // machine type even when this process runs under WOW64.
+    // And faster than GetNativeSystemInfo.
     unsafe {
       let mut process_machine: IMAGE_FILE_MACHINE = 0;
       let mut native_machine: IMAGE_FILE_MACHINE = 0;
@@ -242,6 +242,21 @@ pub struct ReleaseDatabase {
 }
 
 impl ReleaseDatabase {
+  pub fn load_from_url(agent: &ureq::Agent, target_url: Url) -> Result<Self> {
+    // let target_url: Url = target_url.parse()?;
+    log::debug!("target url: {}", target_url);
+
+    let json_data: ReleaseDatabase = agent
+      .get(target_url.as_str())
+      .call()?
+      .body_mut()
+      .read_json()?;
+
+    log::debug!("node_release_info count: {}", json_data.len());
+
+    Ok(json_data)
+  }
+
   /// query latest version
   pub fn latest(&self) -> Option<String> {
     self.inner.first().map(|f| f.version.clone())
@@ -255,18 +270,6 @@ impl ReleaseDatabase {
       .find(|r| matches!(r.lts, LtsSpec::Codename(_)))
       .map(|r| r.version.clone())
   }
-
-  // /// Query by combined criteria (e.g. latest LTS + specified platform)
-  // pub fn latest_lts_with_platform(
-  //   &self,
-  //   platform: &str,
-  // ) -> Option<&NodeReleaseInfo> {
-  //   self
-  //     .lts_indices
-  //     .iter()
-  //     .map(|&i| &self.sorted_releases[i])
-  //     .find(|r| r.files.iter().any(|f| f == platform))
-  // }
 
   /// query version exists
   pub fn version_exists(&self, version: &str) -> bool {
@@ -339,48 +342,26 @@ where
 const CONFIG_FILE_NAME: &str = "settings";
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
-pub enum ConfigType {
+pub enum ConfigFileType {
   #[default]
   Toml,
   Yaml,
 }
 
 #[serde_with::skip_serializing_none]
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
   /// Node.js storage root
   pub root: Option<PathBuf>,
-  // /// Node.js proxy
-  // #[serde(deserialize_with = "deserialize_proxy")]
-  // #[deprecated(
-  //   since = "0.1.3",
-  //   note = "proxy is deprecated, can auto detect it"
-  // )]
-  // pub proxy: Option<String>,
   /// Node.js mirror
   #[serde(deserialize_with = "deserialize_mirror")]
   pub node_mirror: Option<Url>,
   /// npm mirror
   #[serde(deserialize_with = "deserialize_mirror")]
   pub npm_mirror: Option<Url>,
-  // #[deprecated(
-  //   since = "0.1.3",
-  //   note = "arch is deprecated, can auto detect it"
-  // )]
-  // pub arch: Option<ArchSpec>,
-  #[deprecated(
-    since = "0.1.3",
-    note = "originalpath is deprecated, maybe deleted in future"
-  )]
-  pub originalpath: Option<PathBuf>,
-  #[deprecated(
-    since = "0.1.3",
-    note = "originalversion is deprecated, maybe deleted in future"
-  )]
-  pub originalversion: Option<String>,
   #[serde(skip)]
-  ty: ConfigType,
+  ty: ConfigFileType,
 }
 
 fn deserialize_mirror<'de, D>(
@@ -414,7 +395,7 @@ impl Config {
   pub fn load() -> Result<Config> {
     log::debug!("load config");
 
-    let current_dir = PROJECT_DIR.preference_dir();
+    let current_dir = PROJECT_DIR.get().unwrap().preference_dir();
 
     #[cfg(feature = "toml")]
     {
@@ -436,7 +417,11 @@ impl Config {
   pub fn save(&self) -> Result {
     log::debug!("save config");
 
-    let path = PROJECT_DIR.preference_dir().join(CONFIG_FILE_NAME);
+    let path = PROJECT_DIR
+      .get()
+      .unwrap()
+      .preference_dir()
+      .join(CONFIG_FILE_NAME);
 
     #[cfg(feature = "toml")]
     {
@@ -476,6 +461,36 @@ impl Config {
 
     Ok(())
   }
+
+  pub fn get_node_url(&self, paths: &[&str]) -> Url {
+    let mut base_url = if let Some(mirror) = &self.node_mirror {
+      mirror.clone()
+    } else {
+      Url::parse("https://nodejs.org/dist").unwrap()
+    };
+
+    {
+      let mut path = base_url.path_segments_mut().unwrap();
+      path.extend(paths);
+    }
+
+    base_url
+  }
+
+  pub fn get_npm_url(&self, paths: &[&str]) -> Url {
+    let mut base_url = if let Some(mirror) = &self.npm_mirror {
+      mirror.clone()
+    } else {
+      Url::parse("https://npmjs.org/dist").unwrap()
+    };
+
+    {
+      let mut path = base_url.path_segments_mut().unwrap();
+      path.extend(paths);
+    }
+
+    base_url
+  }
 }
 
 #[cfg(feature = "toml")]
@@ -512,7 +527,7 @@ where
 
   match noyalib::from_str::<Config>(&data) {
     Ok(mut config) => {
-      config.ty = ConfigType::Yaml;
+      config.ty = ConfigFileType::Yaml;
       Some(config)
     }
     Err(e) => {

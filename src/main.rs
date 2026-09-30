@@ -1,3 +1,6 @@
+#[cfg(not(target_os = "windows"))]
+compile_error!("only windows is supported.");
+
 use clap::Parser;
 use nvm_windows::model::{CliArgs, Commands, Config};
 use nvm_windows::{
@@ -13,6 +16,17 @@ use nvm_windows::log_init;
 fn main() -> Result<()> {
   #[cfg(feature = "debug")]
   log_init();
+
+  nvm_windows::CURRENT_DIR
+    .set(std::env::current_dir().unwrap())
+    .unwrap();
+
+  let dir = directories::ProjectDirs::from("", "", "nvm")
+    .expect("fail to load app root.");
+  std::fs::create_dir_all(dir.preference_dir())
+    .expect("fail to create preference dir.");
+  std::fs::create_dir_all(dir.cache_dir()).expect("fail to create cache dir.");
+  nvm_windows::PROJECT_DIR.set(dir).unwrap();
 
   let args = CliArgs::parse();
   log::debug!("args: {:?}", args);
