@@ -1,5 +1,3 @@
-use crate::PROJECT_DIR;
-
 use super::Result;
 use anyhow::bail;
 use derive_more::Deref;
@@ -65,7 +63,7 @@ pub enum Commands {
     /// most recent LTS version. [possible values: <semver>(eg: 1.1.0), lts, latest]
     version: VersionSpec,
     /// Skip validation of the downloaded file.
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short, long)]
     skip: bool,
   },
   /// The version must be a specific version.
@@ -78,7 +76,7 @@ pub enum Commands {
   #[command(visible_alias = "ls")]
   List {
     /// Show online available versions.
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short, long)]
     remote: bool,
   },
   /// Enable node.js version management.
@@ -109,11 +107,6 @@ pub enum Commands {
   Use {
     /// The version to use.
     version: VersionSpec,
-    // /// The architecture to use.
-    // /// # deprecated
-    // /// automatically by system arch.
-    // #[deprecated(note = "automatically system arch")]
-    // arch: Option<ArchSpec>,
   },
   /// Set up the application.
   Setup,
@@ -225,9 +218,7 @@ pub struct NodeReleaseInfo {
   // #[serde(rename = "modules")]
   // pub abi_version: Option<String>,
 
-  // /// Whether this is an LTS (Long Term Support) version
-  // #[tabled(skip)]
-  // #[serde(deserialize_with = "deserialize_lts")]
+  /// Whether this is an LTS (Long Term Support) version
   pub lts: LtsSpec,
   // /// Whether this is a security release
   // #[tabled(skip)]
@@ -243,7 +234,6 @@ pub struct ReleaseDatabase {
 
 impl ReleaseDatabase {
   pub fn load_from_url(agent: &ureq::Agent, target_url: Url) -> Result<Self> {
-    // let target_url: Url = target_url.parse()?;
     log::debug!("target url: {}", target_url);
 
     let json_data: ReleaseDatabase = agent
@@ -343,13 +333,14 @@ const CONFIG_FILE_NAME: &str = "settings";
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub enum ConfigFileType {
-  #[default]
+  // #[default]
   Toml,
+  #[default]
   Yaml,
 }
 
 #[serde_with::skip_serializing_none]
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
   /// Node.js storage root
@@ -361,7 +352,30 @@ pub struct Config {
   #[serde(deserialize_with = "deserialize_mirror")]
   pub npm_mirror: Option<Url>,
   #[serde(skip)]
-  ty: ConfigFileType,
+  pub ty: ConfigFileType,
+  #[serde(skip)]
+  pub dir: directories::ProjectDirs,
+}
+
+// ProjectDirs does not implement Default, so provide a manual Default that
+// fills the dir field with the same function used by serde.
+impl Default for Config {
+  fn default() -> Self {
+    let dir = directories::ProjectDirs::from("", "", "nvm")
+      .expect("fail to load app root.");
+    std::fs::create_dir_all(dir.preference_dir())
+      .expect("fail to create preference dir.");
+    std::fs::create_dir_all(dir.cache_dir())
+      .expect("fail to create cache dir.");
+
+    Self {
+      root: None,
+      node_mirror: None,
+      npm_mirror: None,
+      ty: ConfigFileType::default(),
+      dir,
+    }
+  }
 }
 
 fn deserialize_mirror<'de, D>(
@@ -392,10 +406,11 @@ impl Config {
   /// If both toml and yaml features are enabled, it will try to load from toml first.
   /// If toml is not enabled, it will try to load from yaml.
   /// If yaml is not enabled, it will return None.
-  pub fn load() -> Result<Config> {
+  pub fn load() -> Result<Self> {
     log::debug!("load config");
 
-    let current_dir = PROJECT_DIR.get().unwrap().preference_dir();
+    let _self = Self::default();
+    let current_dir = _self.dir.preference_dir();
 
     #[cfg(feature = "toml")]
     {
@@ -411,17 +426,13 @@ impl Config {
       }
     }
 
-    Ok(Config::default())
+    Ok(_self)
   }
 
   pub fn save(&self) -> Result {
     log::debug!("save config");
 
-    let path = PROJECT_DIR
-      .get()
-      .unwrap()
-      .preference_dir()
-      .join(CONFIG_FILE_NAME);
+    let path = self.dir.preference_dir().join(CONFIG_FILE_NAME);
 
     #[cfg(feature = "toml")]
     {
@@ -586,7 +597,6 @@ mod tests {
 
   #[rstest]
   fn arch_spec_display() {
-    // assert_eq!(ArchSpec::X86.to_string(), "x86");
     assert_eq!(ArchSpec::X64.to_string(), "x64");
     assert_eq!(ArchSpec::Arm64.to_string(), "arm64");
   }
@@ -688,11 +698,6 @@ mod tests {
 
   // ---------- Config ----------
 
-  // #[rstest]
-  // fn config_default_is_valid() {
-  //   assert!(Config::default().is_valid().is_ok());
-  // }
-
   #[rstest]
   fn config_valid_with_existing_root() {
     let mut config = Config::default();
@@ -706,22 +711,4 @@ mod tests {
     config.root = Some(PathBuf::from("definitely_not_exists_xyz_123"));
     assert!(config.is_valid().is_err());
   }
-
-  // #[rstest]
-  // fn config_proxy_deserializes() {
-  //   let cases = [
-  //     (r#"{"proxy": ""}"#, None),
-  //     (r#"{"proxy": "none"}"#, None),
-  //     (r#"{"proxy": "NULL"}"#, None),
-  //     (
-  //       r#"{"proxy": "http://127.0.0.1:8080"}"#,
-  //       Some("http://127.0.0.1:8080"),
-  //     ),
-  //   ];
-
-  //   for (json, expected) in cases {
-  //     let config: Config = serde_json::from_str(json).unwrap();
-  //     assert_eq!(config.proxy.as_deref(), expected, "case: {json}");
-  //   }
-  // }
 }

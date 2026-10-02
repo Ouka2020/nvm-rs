@@ -26,7 +26,6 @@ use winreg::{
 use zip::ZipArchive;
 
 use std::sync::LazyLock;
-use std::sync::OnceLock;
 #[cfg(feature = "debug")]
 use tracing_appender::{
   non_blocking::WorkerGuard,
@@ -47,21 +46,26 @@ static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
 #[cfg(feature = "debug")]
 const LOG_FILTER: &str = "info,nvm_windows=debug";
 
-pub static CURRENT_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-pub static PROJECT_DIR: OnceLock<directories::ProjectDirs> = OnceLock::new();
-
-// todo: 配置超时时间
 static HTTP_CLIENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
   let agent_config = ureq::Agent::config_builder()
-    .timeout_global(Some(Duration::from_mins(15)))
-    .timeout_recv_response(Some(Duration::from_mins(1)))
-    .timeout_recv_body(Some(Duration::from_mins(10)))
+    .timeout_global(Some(Duration::from_secs(15 * 60)))
+    .timeout_recv_response(Some(Duration::from_secs(60)))
+    .timeout_recv_body(Some(Duration::from_secs(10 * 60)))
     .build();
   ureq::Agent::new_with_config(agent_config)
 });
 
 const LIST_COUNT: usize = 20;
+
+static VERSION_REGEX: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"^v\d+\.\d+\.\d+$").unwrap());
+
+static NVM_SYMLINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+  RegexBuilder::new(r"%NVM_SYMLINK%")
+    .case_insensitive(true)
+    .build()
+    .unwrap()
+});
 
 pub type Result<T = ()> = anyhow::Result<T>;
 
@@ -163,7 +167,7 @@ pub fn display_or_update_npm_mirror(
 ) -> Result {
   if url.is_some() {
     config.npm_mirror = url;
-    return config.save();
+    config.save()?;
   }
 
   if let Some(npm_mirror) = config.npm_mirror {
@@ -222,7 +226,6 @@ where
   U: AsRef<str>,
 {
   let url = url.as_ref();
-  // let dest = dest.as_ref();
   // 1. send request
   let mut resp = HTTP_CLIENT.get(url).call()?;
 
@@ -296,13 +299,7 @@ pub fn setup(mut config: Config) -> Result {
 
   let node_store_root =
     inquire::Text::new("Which directory to use as the node store root?")
-      .with_default(
-        &PROJECT_DIR
-          .get()
-          .unwrap()
-          .data_local_dir()
-          .to_string_lossy(),
-      )
+      .with_default(&config.dir.data_local_dir().to_string_lossy())
       // .with_help_message("Tip: The node store root must not already exist.")
       .with_validator(node_store_root_validator)
       .prompt()?;
@@ -439,13 +436,6 @@ fn mirror_prompt(
     }
     s => Ok(Some(Url::parse(s)?)),
   }
-
-  // let mirror_url = inquire::Text::new(text_prompt)
-  //   // .with_help_message("Tip: The node store root must not already exist.")
-  //   .with_validator(url_validator)
-  //   .prompt()?;
-
-  // Ok(mirror_url)
 }
 
 /// Get the current version of Node.js.
@@ -531,7 +521,6 @@ where
   T: AsRef<Path>,
 {
   let mut versions = Vec::new();
-  let re = Regex::new(r"^v\d+\.\d+\.\d+$").unwrap();
 
   for entry in fs::read_dir(root.as_ref())? {
     let entry = entry?;
@@ -540,7 +529,7 @@ where
     }
 
     if let Some(name) = entry.file_name().to_str()
-      && re.is_match(name)
+      && VERSION_REGEX.is_match(name)
     {
       versions.push(name.to_string());
     } else {
@@ -548,32 +537,9 @@ where
     }
   }
 
+  versions.sort();
   Ok(versions)
 }
-
-// fn get_node_file_checksum_url(base_url: Url, version: &str) -> Url {
-//   let url = get_url(base_url, &[version, "SHASUMS256.txt"]);
-//   log::debug!("url: {:?}", url);
-
-//   url
-// }
-
-// fn get_node_file_url(version: &str, arch: &ArchSpec, base_url: &Url) -> Url {
-//   let url = format!("node-{}-win-{}.zip", version, arch);
-
-//   let url = get_url(base_url, &[version, &url]);
-//   log::debug!("url: {:?}", url);
-
-//   url
-// }
-
-// fn get_node_mirror(config: &Config) -> Url {
-//   if let Some(mirror) = &config.node_mirror {
-//     mirror.clone()
-//   } else {
-//     "https://nodejs.org/dist/".parse().unwrap()
-//   }
-// }
 
 fn get_nvm_symlink() -> Result<PathBuf> {
   match env::var("NVM_SYMLINK") {
@@ -585,46 +551,12 @@ fn get_nvm_symlink() -> Result<PathBuf> {
   }
 }
 
-// fn get_release_db<T>(base_url: T) -> Result<ReleaseDatabase>
-// where
-//   T: AsRef<str>,
-// {
-//   let base_url = base_url.as_ref();
-//   log::debug!("base url: {}", base_url);
-
-//   let url: Url = base_url.parse()?;
-//   let target_url = url.join("index.json")?;
-//   log::debug!("target url: {}", target_url);
-
-//   let json_data: ReleaseDatabase = HTTP_CLIENT
-//     .get(target_url.as_str())
-//     .call()?
-//     .body_mut()
-//     .read_json()?;
-//   // log::debug!("body len: {}", body.len());
-
-//   // let release_db: ReleaseDatabase = serde_json::from_str(&body)?;
-//   log::debug!("node_release_info count: {}", json_data.len());
-
-//   Ok(json_data)
-// }
-
 fn get_root(config: &Config) -> Result<PathBuf> {
   Ok(match &config.root {
     Some(root) => root.clone(),
     None => env::current_dir()?,
   })
 }
-
-// fn get_url(base_url: &Url, paths: &[&str]) -> Url {
-//   let mut index_url = base_url.clone();
-//   {
-//     let mut path = index_url.path_segments_mut().unwrap();
-//     path.extend(paths);
-//   }
-
-//   index_url
-// }
 
 pub fn install_version(
   config: Config,
@@ -657,8 +589,6 @@ pub fn install_version(
   else {
     bail!("invalid url: {url}");
   };
-  // let zip_path = root.join(file_name);
-  // todo: use temp file to download zip file
   let mut zip_path = tempfile::tempfile()?;
 
   download_file(&url, &mut zip_path)?;
@@ -687,8 +617,6 @@ pub fn install_version(
   let dist_path = &root.join(&ver);
   log::debug!("rename {:?} -> {:?}", org_path, dist_path);
   fs::rename(org_path, dist_path)?;
-
-  // delete_zip_files(root)?;
 
   println!("install {} completed.", ver);
 
@@ -731,8 +659,8 @@ where
 }
 
 pub fn list_local_versions(config: Config) -> Result {
-  let current_version = get_current_version().unwrap_or("".to_string());
-  log::debug!("current version: {}", current_version);
+  let current_version = get_current_version();
+  log::debug!("current version: {:?}", current_version);
 
   let path = get_root(&config)?;
   let versions = get_local_versions(path)?;
@@ -746,7 +674,7 @@ pub fn list_local_versions(config: Config) -> Result {
       log::debug!("found version: {version}");
 
       print!("    {}", version);
-      if version == current_version {
+      if current_version.as_deref() == Some(version.as_str()) {
         println!(" <- In use");
       } else {
         println!();
@@ -1022,11 +950,8 @@ fn update_environment(symlink: impl AsRef<Path>) -> Result {
   let mut path: String = env.get_value("Path")?;
 
   log::debug!("Environment Path: {}", path);
-  let regex = RegexBuilder::new(r"%NVM_SYMLINK%")
-    .case_insensitive(true)
-    .build()?;
 
-  if regex.is_match(&path) {
+  if NVM_SYMLINK_REGEX.is_match(&path) {
     log::debug!("NVM_SYMLINK is already in Path");
   } else {
     log::debug!("NVM_SYMLINK is not in Path");
