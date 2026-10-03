@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/Ouka2020/nvm-rs/compare/v0.1.2...v0.1.3) - 2026-10-03
+
+### Added
+
+- 添加大量单元测试覆盖核心功能
+- 仅支持 Windows 平台并完善目录与镜像配置
+- 实现 Windows 平台自动检测系统架构并替换旧的架构检测逻辑
+- 重构激活/停用相关函数并添加临时文件依赖
+- 添加x86架构支持并新增配置类型枚举
+- 添加normpath依赖并重构路径处理逻辑，优化README文档
+- 新增setup初始化命令，完善项目配置流程
+
+### Other
+
+- *(lib)* 添加全面的单元测试并改进断言
+- 代码优化与结构重构
+- 重构Windows架构检测逻辑并清理冗余依赖
+- 注释掉tips函数和相关调用
+- 移除架构自动检测相关废弃功能与代码
+- 重构依赖与配置，简化架构检测逻辑
+- 重构项目代码结构与功能实现
+- *(readme)* 添加致谢部分，提及基于nvm-windows开发
+
 ## [0.1.2](https://github.com/Ouka2020/nvm-rs/compare/v0.1.1...v0.1.2) - 2026-09-15
 
 ### Other
