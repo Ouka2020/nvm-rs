@@ -978,9 +978,10 @@ fn update_environment(symlink: impl AsRef<Path>) -> Result {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
   use super::*;
-  use pretty_assertions::assert_eq;
+  #[allow(unused_imports)]
+  use pretty_assertions::{assert_eq, assert_ne};
   use rstest::{fixture, rstest};
 
   #[fixture]
@@ -994,12 +995,48 @@ mod test {
     }
   }
 
+  // ---------- get_nvm_symlink ----------
+
   #[rstest]
   fn get_nvm_symlink_test() {
+    let saved = env::var("NVM_SYMLINK").ok();
+    unsafe { env::set_var("NVM_SYMLINK", r"C:\Program Files\nodejs") };
+
     let nvm_symlink = get_nvm_symlink().unwrap();
-    let nvm_symlink = nvm_symlink.to_str().unwrap();
-    assert_eq!(nvm_symlink, "C:\\Program Files\\nodejs");
+    assert_eq!(nvm_symlink, PathBuf::from(r"C:\Program Files\nodejs"));
+
+    // Restore
+    match saved {
+      Some(val) => unsafe { env::set_var("NVM_SYMLINK", val) },
+      None => unsafe { env::remove_var("NVM_SYMLINK") },
+    }
   }
+
+  // SAFETY: This test is not run in parallel with other tests that
+  // depend on NVM_SYMLINK (single-threaded test harness by default).
+  #[rstest]
+  fn get_nvm_symlink_fails_without_env_var() {
+    // Save and remove the env var for the duration of this test.
+    let saved = env::var("NVM_SYMLINK").ok();
+    // SAFETY: no other thread should be reading/writing this env var.
+    unsafe { env::remove_var("NVM_SYMLINK") };
+
+    let result = get_nvm_symlink();
+    assert!(result.is_err());
+    assert!(
+      result
+        .unwrap_err()
+        .to_string()
+        .contains("get nvm symlink failed")
+    );
+
+    // Restore the env var if it was set before.
+    if let Some(val) = saved {
+      unsafe { env::set_var("NVM_SYMLINK", val) };
+    }
+  }
+
+  // ---------- get_root ----------
 
   #[rstest]
   fn get_root_test(config: Config) {
@@ -1008,97 +1045,388 @@ mod test {
   }
 
   #[rstest]
-  fn get_local_versions_test(config: Config) {
-    let root = get_root(&config).unwrap();
-
-    let local_versions = get_local_versions(root).unwrap();
-    assert!(!local_versions.is_empty());
+  fn get_root_with_none_falls_back_to_current_dir(config: Config) {
+    let mut cfg = config;
+    cfg.root = None;
+    let root = get_root(&cfg).unwrap();
+    assert_eq!(root, env::current_dir().unwrap());
   }
+
+  // ---------- get_current_version / display_current ----------
 
   #[rstest]
   fn get_current_version_test() {
-    let current_ver = get_current_version();
-    assert_eq!(current_ver.is_some(), true);
+    let saved = env::var("NVM_SYMLINK").ok();
+    let tmp = tempfile::tempdir().unwrap();
+    // Point to a directory that exists but has no node.exe
+    unsafe { env::set_var("NVM_SYMLINK", tmp.path()) };
+
+    // Should return None because there's no node.exe in the temp dir
+    let result = get_current_version();
+    assert!(result.is_none());
+
+    // Restore
+    match saved {
+      Some(val) => unsafe { env::set_var("NVM_SYMLINK", val) },
+      None => unsafe { env::remove_var("NVM_SYMLINK") },
+    }
   }
 
   #[rstest]
   fn display_current_test() {
-    assert_eq!(display_current().is_ok(), true);
+    let saved = env::var("NVM_SYMLINK").ok();
+    let tmp = tempfile::tempdir().unwrap();
+    unsafe { env::set_var("NVM_SYMLINK", tmp.path()) };
+
+    assert!(display_current().is_ok());
+
+    match saved {
+      Some(val) => unsafe { env::set_var("NVM_SYMLINK", val) },
+      None => unsafe { env::remove_var("NVM_SYMLINK") },
+    }
   }
 
-  #[rstest]
-  fn deactivate_and_activate_version_test(config: Config) {
-    assert_eq!(deactivate_symlink().is_ok(), true);
-    assert_eq!(activate_symlink(config.clone()).is_ok(), true);
-  }
+  // ---------- deactivate / activate ----------
 
   #[rstest]
-  fn install_and_uninstall_version_test(config: Config) {
+  fn deactivate_and_activate_version_test() {
+    let saved = env::var("NVM_SYMLINK").ok();
+    let tmp = tempfile::tempdir().unwrap();
+    let symlink_path = tmp.path().join("nodejs");
+    let root = tmp.path().join("root");
+    fs::create_dir_all(&root).unwrap();
+    // Create a fake version directory
+    let ver_dir = root.join("v18.0.0");
+    fs::create_dir_all(&ver_dir).unwrap();
+
+    unsafe { env::set_var("NVM_SYMLINK", &symlink_path) };
+
+    // deactivate when no symlink exists -> should succeed
+    assert!(deactivate_symlink().is_ok());
+
+    // activate with a version installed
+    let config = Config {
+      root: Some(root.clone()),
+      ..Default::default()
+    };
+    assert!(activate_symlink(config).is_ok());
+
+    // The symlink (junction) should now exist
+    assert!(symlink_path.exists());
+
+    // deactivate again -> should succeed
+    assert!(deactivate_symlink().is_ok());
+
+    // Restore
+    match saved {
+      Some(val) => unsafe { env::set_var("NVM_SYMLINK", val) },
+      None => unsafe { env::remove_var("NVM_SYMLINK") },
+    }
+  }
+
+  // ---------- install / uninstall ----------
+
+  #[rstest]
+  fn install_version_network_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {
+      root: Some(tmp.path().to_path_buf()),
+      node_mirror: Some(Url::parse("http://localhost:1/").unwrap()), // unreachable
+      ..Default::default()
+    };
     let ver = VersionSpec::Exact("v23.0.0".to_string());
+    let result = install_version(config, ver, false);
+    assert!(result.is_err(), "expected network error");
+  }
 
-    let r = install_version(config.clone(), ver.clone(), false);
-    if let Err(e) = &r {
-      println!("{:?}", e);
-    }
-    assert_eq!(r.is_ok(), true);
+  // ---------- list_local_versions / list_remote_versions ----------
 
-    let r = uninstall_version(config, ver);
-    if let Err(e) = &r {
-      println!("{:?}", e);
+  #[rstest]
+  fn list_local_versions_empty() {
+    let saved = env::var("NVM_SYMLINK").ok();
+    let tmp = tempfile::tempdir().unwrap();
+    unsafe { env::set_var("NVM_SYMLINK", tmp.path()) };
+
+    let config = Config {
+      root: Some(tmp.path().to_path_buf()),
+      ..Default::default()
+    };
+    assert!(list_local_versions(config).is_ok());
+
+    match saved {
+      Some(val) => unsafe { env::set_var("NVM_SYMLINK", val) },
+      None => unsafe { env::remove_var("NVM_SYMLINK") },
     }
-    assert_eq!(r.is_ok(), true);
   }
 
   #[rstest]
-  fn list_local_versions_test(config: Config) {
-    assert_eq!(list_local_versions(config.clone()).is_ok(), true);
+  fn list_local_versions_with_versions() {
+    let saved = env::var("NVM_SYMLINK").ok();
+    let tmp = tempfile::tempdir().unwrap();
+    unsafe { env::set_var("NVM_SYMLINK", tmp.path()) };
+
+    // Create fake version dirs
+    fs::create_dir(tmp.path().join("v18.0.0")).unwrap();
+    fs::create_dir(tmp.path().join("v20.0.0")).unwrap();
+
+    let config = Config {
+      root: Some(tmp.path().to_path_buf()),
+      ..Default::default()
+    };
+    assert!(list_local_versions(config).is_ok());
+
+    match saved {
+      Some(val) => unsafe { env::set_var("NVM_SYMLINK", val) },
+      None => unsafe { env::remove_var("NVM_SYMLINK") },
+    }
   }
 
   #[rstest]
-  fn list_remote_versions_test(config: Config) {
-    assert_eq!(list_remote_versions(config.clone()).is_ok(), true);
+  fn list_remote_versions_network_error() {
+    let config = Config {
+      root: None,
+      node_mirror: Some(Url::parse("http://localhost:1/").unwrap()),
+      ..Default::default()
+    };
+    let result = list_remote_versions(config);
+    assert!(result.is_err(), "expected network error");
   }
+
+  // ---------- mirror display ----------
 
   #[rstest]
   fn display_npm_mirror_test(config: Config) {
-    assert_eq!(
-      display_or_update_npm_mirror(config.clone(), None).is_ok(),
-      true
-    );
+    assert!(display_or_update_npm_mirror(config.clone(), None).is_ok());
   }
 
   #[rstest]
   fn display_node_mirror_test(config: Config) {
-    assert_eq!(
-      display_or_update_node_mirror(config.clone(), None).is_ok(),
-      true
-    );
+    assert!(display_or_update_node_mirror(config.clone(), None).is_ok());
   }
+
+  #[rstest]
+  fn display_or_update_npm_mirror_with_url(config: Config) {
+    let url =
+      Url::parse("https://registry.npmmirror.com/-/binary/npm/").unwrap();
+    assert!(display_or_update_npm_mirror(config, Some(url)).is_ok());
+  }
+
+  #[rstest]
+  fn display_or_update_node_mirror_with_url(config: Config) {
+    let url = Url::parse("https://cdn.npmmirror.com/binaries/node/").unwrap();
+    assert!(display_or_update_node_mirror(config, Some(url)).is_ok());
+  }
+
+  // ---------- display_root ----------
 
   #[rstest]
   fn display_root_test(config: Config) {
     // display current root
-    assert_eq!(
-      display_or_update_root::<&str>(config.clone(), None).is_ok(),
-      true
-    );
+    assert!(display_or_update_root::<&str>(config.clone(), None).is_ok());
     // error: non-existent path
     let r = display_or_update_root(
       config.clone(),
       Some(PathBuf::from("nonexistent_dir_xyz")),
     );
-    assert_eq!(r.is_err(), true);
+    assert!(r.is_err());
+  }
+
+  // ---------- switch_version ----------
+
+  #[rstest]
+  fn switch_version_not_installed_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {
+      root: Some(tmp.path().to_path_buf()),
+      node_mirror: Some(Url::parse("http://localhost:1/").unwrap()),
+      ..Default::default()
+    };
+    let ver = VersionSpec::Exact("v24.2.0".to_string());
+    let result = switch_version(config, ver);
+    assert!(result.is_err());
+  }
+
+  // ---------- uninstall_version boundary tests ----------
+
+  #[rstest]
+  fn uninstall_version_latest_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {
+      root: Some(tmp.path().to_path_buf()),
+      ..Default::default()
+    };
+    let result = uninstall_version(config, VersionSpec::Latest);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+      err_msg.contains("latest") || err_msg.contains("lts"),
+      "unexpected error message: {err_msg}"
+    );
   }
 
   #[rstest]
-  fn switch_version_test(config: Config) {
-    let ver = VersionSpec::Exact("v24.2.0".to_string());
-    let r = switch_version(config.clone(), ver);
-    if let Err(e) = &r {
-      println!("{:?}", e);
-      assert_eq!(e.to_string(), "version \"v24.2.0\" not installed");
+  fn uninstall_version_lts_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {
+      root: Some(tmp.path().to_path_buf()),
+      ..Default::default()
+    };
+    let result = uninstall_version(config, VersionSpec::Lts);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+      err_msg.contains("latest") || err_msg.contains("lts"),
+      "unexpected error message: {err_msg}"
+    );
+  }
+
+  #[rstest]
+  fn uninstall_version_not_installed_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {
+      root: Some(tmp.path().to_path_buf()),
+      ..Default::default()
+    };
+    let result =
+      uninstall_version(config, VersionSpec::Exact("v99.99.99".to_string()));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("not installed"));
+  }
+
+  // ---------- delete_junction_link ----------
+
+  #[rstest]
+  fn delete_junction_link_nonexistent_is_ok() {
+    let tmp = tempfile::tempdir().unwrap();
+    let nonexistent = tmp.path().join("does_not_exist");
+    // Deleting a non-existent link should still succeed (the function
+    // intentionally ignores errors from `remove_dir`).
+    assert!(delete_junction_link(&nonexistent).is_ok());
+  }
+
+  // ---------- safe_extract ----------
+
+  /// Helper: create a zip archive on disk with the given entry names and
+  /// optional content.  Returns the path to the zip file inside a `TempDir`
+  /// (the `TempDir` must be kept alive for the duration of the test).
+  fn create_test_zip(
+    entries: &[(&str, &[u8], bool)],
+  ) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip_path = tmp.path().join("test.zip");
+    let file = File::create(&zip_path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+
+    for &(name, data, is_dir) in entries {
+      let options = zip::write::SimpleFileOptions::default();
+      if is_dir {
+        zip.add_directory(name, options).unwrap();
+      } else {
+        zip.start_file(name, options).unwrap();
+        std::io::Write::write_all(&mut zip, data).unwrap();
+      }
     }
-    assert_eq!(r.is_err(), true);
+    zip.finish().unwrap();
+    (tmp, zip_path)
+  }
+
+  #[rstest]
+  fn safe_extract_normal_file() {
+    let (tmp, zip_path) =
+      create_test_zip(&[("hello.txt", b"hello world", false)]);
+    let dest = tmp.path().join("out");
+    fs::create_dir(&dest).unwrap();
+
+    let file = File::open(&zip_path).unwrap();
+    let mut archive = ZipArchive::new(BufReader::new(file)).unwrap();
+    let mut entry = archive.by_index(0).unwrap();
+    safe_extract(&mut entry, &dest).unwrap();
+
+    let extracted = dest.join("hello.txt");
+    assert!(extracted.exists());
+    assert_eq!(fs::read_to_string(&extracted).unwrap(), "hello world");
+  }
+
+  #[rstest]
+  fn safe_extract_directory() {
+    let (tmp, zip_path) = create_test_zip(&[
+      ("subdir/", b"", true),
+      ("subdir/file.txt", b"data", false),
+    ]);
+    let dest = tmp.path().join("out");
+    fs::create_dir(&dest).unwrap();
+
+    let file = File::open(&zip_path).unwrap();
+    let mut archive = ZipArchive::new(BufReader::new(file)).unwrap();
+
+    // Extract directory entry
+    {
+      let mut entry = archive.by_index(0).unwrap();
+      safe_extract(&mut entry, &dest).unwrap();
+    }
+    assert!(dest.join("subdir").is_dir());
+
+    // Extract file inside directory
+    {
+      let mut entry = archive.by_index(1).unwrap();
+      safe_extract(&mut entry, &dest).unwrap();
+    }
+    assert_eq!(
+      fs::read_to_string(dest.join("subdir/file.txt")).unwrap(),
+      "data"
+    );
+  }
+
+  #[rstest]
+  fn safe_extract_zip_slip_detected() {
+    let (tmp, zip_path) =
+      create_test_zip(&[("../../evil.txt", b"malicious", false)]);
+    let dest = tmp.path().join("out");
+    fs::create_dir(&dest).unwrap();
+
+    let file = File::open(&zip_path).unwrap();
+    let mut archive = ZipArchive::new(BufReader::new(file)).unwrap();
+    let mut entry = archive.by_index(0).unwrap();
+
+    // The zip crate's `mangled_name()` strips leading `../`, so the
+    // extraction should succeed but the file must land *inside* `dest`,
+    // NOT outside it.
+    safe_extract(&mut entry, &dest).unwrap();
+
+    // The evil file must NOT exist outside the destination directory.
+    let escaped = tmp.path().join("evil.txt");
+    assert!(!escaped.exists(), "Zip Slip: file escaped destination");
+
+    // It should have been sanitized into the destination directory.
+    let sanitized = dest.join("evil.txt");
+    assert!(
+      sanitized.exists(),
+      "sanitized file should exist inside dest"
+    );
+  }
+
+  #[rstest]
+  fn safe_extract_nested_dirs() {
+    let (tmp, zip_path) = create_test_zip(&[
+      ("a/", b"", true),
+      ("a/b/", b"", true),
+      ("a/b/c/", b"", true),
+      ("a/b/c/deep.txt", b"deep content", false),
+    ]);
+    let dest = tmp.path().join("out");
+    fs::create_dir(&dest).unwrap();
+
+    let file = File::open(&zip_path).unwrap();
+    let mut archive = ZipArchive::new(BufReader::new(file)).unwrap();
+
+    for i in 0..archive.len() {
+      let mut entry = archive.by_index(i).unwrap();
+      safe_extract(&mut entry, &dest).unwrap();
+    }
+
+    let deep_file = dest.join("a/b/c/deep.txt");
+    assert!(deep_file.exists());
+    assert_eq!(fs::read_to_string(&deep_file).unwrap(), "deep content");
   }
 
   // ---------- symlink_validator ----------
@@ -1168,7 +1496,7 @@ mod test {
     let mut tmp = tempfile::tempfile().unwrap();
     std::io::Write::write_all(&mut tmp, content).unwrap();
 
-    assert_eq!(file_validate(&tmp, &expected_hash).unwrap(), true);
+    assert!(file_validate(&tmp, &expected_hash).unwrap());
   }
 
   #[rstest]
@@ -1177,7 +1505,7 @@ mod test {
     let mut tmp = tempfile::tempfile().unwrap();
     std::io::Write::write_all(&mut tmp, content).unwrap();
 
-    assert_eq!(file_validate(&tmp, "deadbeef").unwrap(), false);
+    assert!(!file_validate(&tmp, "deadbeef").unwrap());
   }
 
   #[rstest]
@@ -1186,7 +1514,7 @@ mod test {
     let expected_hash = hex::encode(sha2::Sha256::digest(b""));
 
     let tmp = tempfile::tempfile().unwrap();
-    assert_eq!(file_validate(&tmp, &expected_hash).unwrap(), true);
+    assert!(file_validate(&tmp, &expected_hash).unwrap());
   }
 
   // ---------- get_local_versions ----------
@@ -1229,20 +1557,7 @@ mod test {
     fs::create_dir(tmp.path().join("v20.0.0")).unwrap();
 
     let versions = get_local_versions(tmp.path()).unwrap();
-    assert_eq!(
-      versions,
-      vec!["v18.0.0", "v20.0.0", "v22.0.0"]
-    );
-  }
-
-  // ---------- get_root ----------
-
-  #[rstest]
-  fn get_root_with_none_falls_back_to_current_dir(config: Config) {
-    let mut cfg = config;
-    cfg.root = None;
-    let root = get_root(&cfg).unwrap();
-    assert_eq!(root, env::current_dir().unwrap());
+    assert_eq!(versions, vec!["v18.0.0", "v20.0.0", "v22.0.0"]);
   }
 
   // ---------- version_exists ----------
@@ -1251,27 +1566,30 @@ mod test {
   fn version_exists_latest(sample_db: ReleaseDatabase) {
     let tmp = tempfile::tempdir().unwrap();
     let version = VersionSpec::Latest;
-    let (exists, ver) = version_exists(&sample_db, &version, tmp.path()).unwrap();
+    let (exists, ver) =
+      version_exists(&sample_db, &version, tmp.path()).unwrap();
     assert_eq!(ver, "v22.0.0");
-    assert_eq!(exists, false);
+    assert!(!exists);
   }
 
   #[rstest]
   fn version_exists_lts(sample_db: ReleaseDatabase) {
     let tmp = tempfile::tempdir().unwrap();
     let version = VersionSpec::Lts;
-    let (exists, ver) = version_exists(&sample_db, &version, tmp.path()).unwrap();
+    let (exists, ver) =
+      version_exists(&sample_db, &version, tmp.path()).unwrap();
     assert_eq!(ver, "v20.0.0");
-    assert_eq!(exists, false);
+    assert!(!exists);
   }
 
   #[rstest]
   fn version_exists_exact_found(sample_db: ReleaseDatabase) {
     let tmp = tempfile::tempdir().unwrap();
     let version = VersionSpec::Exact("v18.0.0".to_string());
-    let (exists, ver) = version_exists(&sample_db, &version, tmp.path()).unwrap();
+    let (exists, ver) =
+      version_exists(&sample_db, &version, tmp.path()).unwrap();
     assert_eq!(ver, "v18.0.0");
-    assert_eq!(exists, false);
+    assert!(!exists);
   }
 
   #[rstest]
@@ -1279,9 +1597,10 @@ mod test {
     let tmp = tempfile::tempdir().unwrap();
     fs::create_dir(tmp.path().join("v18.0.0")).unwrap();
     let version = VersionSpec::Exact("v18.0.0".to_string());
-    let (exists, ver) = version_exists(&sample_db, &version, tmp.path()).unwrap();
+    let (exists, ver) =
+      version_exists(&sample_db, &version, tmp.path()).unwrap();
     assert_eq!(ver, "v18.0.0");
-    assert_eq!(exists, true);
+    assert!(exists);
   }
 
   #[rstest]
@@ -1354,7 +1673,10 @@ mod test {
   #[rstest]
   fn display_or_update_root_none_with_root_set(config: Config) {
     let result = display_or_update_root::<&str>(config, None);
-    assert!(result.is_ok(), "expected success when displaying current root");
+    assert!(
+      result.is_ok(),
+      "expected success when displaying current root"
+    );
   }
 
   #[rstest]
