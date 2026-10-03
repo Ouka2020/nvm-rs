@@ -700,15 +700,323 @@ mod tests {
 
   #[rstest]
   fn config_valid_with_existing_root() {
-    let mut config = Config::default();
-    config.root = Some(std::env::temp_dir());
+    let config = Config {
+      root: Some(std::env::temp_dir()),
+      ..Default::default()
+    };
     assert!(config.is_valid().is_ok());
   }
 
   #[rstest]
   fn config_invalid_with_missing_root() {
-    let mut config = Config::default();
-    config.root = Some(PathBuf::from("definitely_not_exists_xyz_123"));
+    let config = Config {
+      root: Some(PathBuf::from("definitely_not_exists_xyz_123")),
+      ..Default::default()
+    };
     assert!(config.is_valid().is_err());
+  }
+
+  #[rstest]
+  fn config_invalid_with_root_not_set() {
+    let config = Config::default();
+    assert_eq!(config.root, None);
+    let result = config.is_valid();
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("not set"));
+  }
+
+  // ---------- VersionSpec additional tests ----------
+
+  #[rstest]
+  fn version_spec_parses_with_v_prefix() {
+    match "v22.5.1".parse::<VersionSpec>().unwrap() {
+      VersionSpec::Exact(v) => assert_eq!(v, "v22.5.1"),
+      other => panic!("expected Exact, got {other:?}"),
+    }
+  }
+
+  #[rstest]
+  fn version_spec_parses_latest_case_insensitive() {
+    assert!(matches!(
+      "Latest".parse::<VersionSpec>().unwrap(),
+      VersionSpec::Latest
+    ));
+    assert!(matches!(
+      "LATEST".parse::<VersionSpec>().unwrap(),
+      VersionSpec::Latest
+    ));
+  }
+
+  // ---------- ArchSpec additional tests ----------
+
+  #[rstest]
+  fn arch_spec_unknown_from_zero() {
+    let arch = ArchSpec::from(0u16);
+    assert_eq!(arch, ArchSpec::Unknown);
+  }
+
+  #[rstest]
+  fn arch_spec_from_valid_machine_type() {
+    let arch = ArchSpec::from(IMAGE_FILE_MACHINE_AMD64);
+    assert_eq!(arch, ArchSpec::X64);
+
+    let arch = ArchSpec::from(IMAGE_FILE_MACHINE_ARM64);
+    assert_eq!(arch, ArchSpec::Arm64);
+  }
+
+  // ---------- LtsSpec additional tests ----------
+
+  #[rstest]
+  fn lts_spec_true_is_error() {
+    let result = serde_json::from_str::<NodeReleaseInfo>(
+      r#"{"version":"v20.0.0","date":"2023-04-01","lts":true}"#,
+    );
+    assert!(result.is_err());
+  }
+
+  #[rstest]
+  fn lts_spec_empty_codename() {
+    let info: NodeReleaseInfo = serde_json::from_str(
+      r#"{"version":"v20.0.0","date":"2023-04-01","lts":""}"#,
+    )
+    .unwrap();
+    assert!(matches!(info.lts, LtsSpec::Codename(name) if name.is_empty()));
+  }
+
+  // ---------- fill_len additional tests ----------
+
+  #[rstest]
+  fn fill_len_exact_length() {
+    assert_eq!(fill_len(vec![1, 2, 3], 3), vec![1, 2, 3]);
+  }
+
+  #[rstest]
+  fn fill_len_zero_length() {
+    let empty: Vec<i32> = vec![];
+    assert_eq!(fill_len(empty, 0), Vec::<i32>::new());
+  }
+
+  #[rstest]
+  fn fill_len_empty_to_n() {
+    let empty: Vec<u8> = vec![];
+    assert_eq!(fill_len(empty, 3), vec![0, 0, 0]);
+  }
+
+  // ---------- Config::get_node_url ----------
+
+  #[rstest]
+  fn config_get_node_url_with_mirror() {
+    let config = Config {
+      node_mirror: Some(Url::parse("https://npmmirror.com/mirrors/node").unwrap()),
+      ..Default::default()
+    };
+
+    let url = config.get_node_url(&["index.json"]);
+    assert_eq!(
+      url.as_str(),
+      "https://npmmirror.com/mirrors/node/index.json"
+    );
+  }
+
+  #[rstest]
+  fn config_get_node_url_without_mirror() {
+    let config = Config::default();
+    assert_eq!(config.node_mirror, None);
+
+    let url = config.get_node_url(&["index.json"]);
+    assert_eq!(url.as_str(), "https://nodejs.org/dist/index.json");
+  }
+
+  #[rstest]
+  fn config_get_node_url_multiple_paths() {
+    let config = Config::default();
+    let url = config.get_node_url(&["v18.0.0", "node-v18.0.0-win-x64.zip"]);
+    assert_eq!(
+      url.as_str(),
+      "https://nodejs.org/dist/v18.0.0/node-v18.0.0-win-x64.zip"
+    );
+  }
+
+  // ---------- Config::get_npm_url ----------
+
+  #[rstest]
+  fn config_get_npm_url_with_mirror() {
+    let config = Config {
+      npm_mirror: Some(Url::parse("https://npmmirror.com/mirrors/npm").unwrap()),
+      ..Default::default()
+    };
+
+    let url = config.get_npm_url(&["v10.0.0", "npm-10.0.0.zip"]);
+    assert_eq!(
+      url.as_str(),
+      "https://npmmirror.com/mirrors/npm/v10.0.0/npm-10.0.0.zip"
+    );
+  }
+
+  #[rstest]
+  fn config_get_npm_url_without_mirror() {
+    let config = Config::default();
+    assert_eq!(config.npm_mirror, None);
+
+    let url = config.get_npm_url(&["v10.0.0"]);
+    assert_eq!(url.as_str(), "https://npmjs.org/dist/v10.0.0");
+  }
+
+  // ---------- ConfigFileType ----------
+
+  #[rstest]
+  fn config_file_type_default_is_yaml() {
+    let ty = ConfigFileType::default();
+    assert!(matches!(ty, ConfigFileType::Yaml));
+  }
+
+  // ---------- deserialize_mirror ----------
+
+  #[rstest]
+  fn deserialize_mirror_empty_string() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+      #[serde(deserialize_with = "deserialize_mirror")]
+      mirror: Option<Url>,
+    }
+
+    let json = r#"{"mirror": ""}"#;
+    let config: TestConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.mirror, None);
+  }
+
+  #[rstest]
+  fn deserialize_mirror_null_string() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+      #[serde(deserialize_with = "deserialize_mirror")]
+      mirror: Option<Url>,
+    }
+
+    let json = r#"{"mirror": "null"}"#;
+    let config: TestConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.mirror, None);
+  }
+
+  #[rstest]
+  fn deserialize_mirror_none_string() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+      #[serde(deserialize_with = "deserialize_mirror")]
+      mirror: Option<Url>,
+    }
+
+    let json = r#"{"mirror": "none"}"#;
+    let config: TestConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.mirror, None);
+
+    let json = r#"{"mirror": "NONE"}"#;
+    let config: TestConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.mirror, None);
+  }
+
+  #[rstest]
+  fn deserialize_mirror_valid_url() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+      #[serde(deserialize_with = "deserialize_mirror")]
+      mirror: Option<Url>,
+    }
+
+    let json = r#"{"mirror": "https://example.com/mirror/"}"#;
+    let config: TestConfig = serde_json::from_str(json).unwrap();
+    assert!(config.mirror.is_some());
+    assert_eq!(
+      config.mirror.unwrap().as_str(),
+      "https://example.com/mirror/"
+    );
+  }
+
+  #[rstest]
+  fn deserialize_mirror_invalid_url_returns_none() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+      #[serde(deserialize_with = "deserialize_mirror")]
+      mirror: Option<Url>,
+    }
+
+    let json = r#"{"mirror": "not-a-valid-url"}"#;
+    let config: TestConfig = serde_json::from_str(json).unwrap();
+    assert_eq!(config.mirror, None);
+  }
+
+  // ---------- ReleaseDatabase additional tests ----------
+
+  #[rstest]
+  fn release_db_version_exists_without_v_prefix(sample_db: ReleaseDatabase) {
+    assert!(sample_db.version_exists("22.0.0"));
+    assert!(sample_db.version_exists("20.0.0"));
+  }
+
+  #[rstest]
+  fn release_db_by_major_with_multiple_versions() {
+    let json = r#"[
+      {"version": "v20.3.0", "date": "2024-01-01", "lts": false},
+      {"version": "v20.2.0", "date": "2023-12-01", "lts": false},
+      {"version": "v20.1.0", "date": "2023-11-01", "lts": false},
+      {"version": "v19.0.0", "date": "2023-10-01", "lts": false}
+    ]"#;
+    let db: ReleaseDatabase = serde_json::from_str(json).unwrap();
+
+    let result = db.by_major(20, 3);
+    assert_eq!(result.len(), 3);
+    assert_eq!(result[0], "v20.3.0");
+    assert_eq!(result[1], "v20.2.0");
+    assert_eq!(result[2], "v20.1.0");
+  }
+
+  #[rstest]
+  fn release_db_latest_list_filters_lts(sample_db: ReleaseDatabase) {
+    let result = sample_db.latest_list(10);
+    assert!(!result.contains(&"v20.0.0".to_string()));
+    assert!(!result.contains(&"v18.0.0".to_string()));
+    assert!(result.contains(&"v22.0.0".to_string()));
+    assert!(result.contains(&"v21.0.0".to_string()));
+  }
+
+  #[rstest]
+  fn release_db_lts_list_filters_non_lts(sample_db: ReleaseDatabase) {
+    let result = sample_db.lts_list(10);
+    assert!(!result.contains(&"v22.0.0".to_string()));
+    assert!(!result.contains(&"v21.0.0".to_string()));
+    assert!(result.contains(&"v20.0.0".to_string()));
+    assert!(result.contains(&"v18.0.0".to_string()));
+  }
+
+  // ---------- Config serialization ----------
+
+  #[rstest]
+  fn config_serialization_roundtrip() {
+    let config = Config {
+      root: Some(PathBuf::from("/test/root")),
+      node_mirror: Some(Url::parse("https://example.com/node/").unwrap()),
+      npm_mirror: Some(Url::parse("https://example.com/npm/").unwrap()),
+      ..Default::default()
+    };
+
+    let serialized = serde_json::to_string(&config).unwrap();
+    let deserialized: Config = serde_json::from_str(&serialized).unwrap();
+
+    assert_eq!(deserialized.root, config.root);
+    assert_eq!(deserialized.node_mirror, config.node_mirror);
+    assert_eq!(deserialized.npm_mirror, config.npm_mirror);
+  }
+
+  #[rstest]
+  fn config_serialization_with_none_values() {
+    let config = Config::default();
+    assert_eq!(config.root, None);
+    assert_eq!(config.node_mirror, None);
+    assert_eq!(config.npm_mirror, None);
+
+    let serialized = serde_json::to_string(&config).unwrap();
+    assert!(!serialized.contains("root"));
+    assert!(!serialized.contains("node_mirror"));
+    assert!(!serialized.contains("npm_mirror"));
   }
 }

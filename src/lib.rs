@@ -985,12 +985,13 @@ mod test {
 
   #[fixture]
   fn config() -> Config {
-    let mut config = Config::default();
-    config.root = Some(PathBuf::from("nvmroot"));
-    config.node_mirror =
-      Some(Url::parse("https://npmmirror.com/mirrors/node/").unwrap());
-
-    config
+    Config {
+      root: Some(PathBuf::from("nvmroot")),
+      node_mirror: Some(
+        Url::parse("https://npmmirror.com/mirrors/node/").unwrap(),
+      ),
+      ..Default::default()
+    }
   }
 
   #[rstest]
@@ -1011,7 +1012,7 @@ mod test {
     let root = get_root(&config).unwrap();
 
     let local_versions = get_local_versions(root).unwrap();
-    assert_eq!(local_versions.len() > 0, true);
+    assert!(!local_versions.is_empty());
   }
 
   #[rstest]
@@ -1098,5 +1099,310 @@ mod test {
       assert_eq!(e.to_string(), "version \"v24.2.0\" not installed");
     }
     assert_eq!(r.is_err(), true);
+  }
+
+  // ---------- symlink_validator ----------
+
+  #[rstest]
+  #[case("C:\\Program Files\\nodejs", true)]
+  #[case("D:\\nodejs", true)]
+  #[case("nodejs", true)]
+  #[case("C:\\path\\to\\node.exe", false)]
+  #[case("test.txt", false)]
+  fn symlink_validator_test(#[case] input: &str, #[case] expect_valid: bool) {
+    let result = symlink_validator(input).unwrap();
+    if expect_valid {
+      assert!(matches!(result, Validation::Valid));
+    } else {
+      assert!(matches!(result, Validation::Invalid(_)));
+    }
+  }
+
+  // ---------- node_store_root_validator ----------
+
+  #[rstest]
+  #[case("D:\\nvm_root", true)]
+  #[case("C:\\Users\\test\\AppData\\Local\\nvm", true)]
+  #[case("nvm", true)]
+  #[case("test.exe", false)]
+  #[case("config.toml", false)]
+  fn node_store_root_validator_test(
+    #[case] input: &str,
+    #[case] expect_valid: bool,
+  ) {
+    let result = node_store_root_validator(input).unwrap();
+    if expect_valid {
+      assert!(matches!(result, Validation::Valid));
+    } else {
+      assert!(matches!(result, Validation::Invalid(_)));
+    }
+  }
+
+  // ---------- url_validator ----------
+
+  #[rstest]
+  #[case("https://nodejs.org/dist/", true)]
+  #[case("http://example.com", true)]
+  #[case("HTTPS://NPMMIRROR.COM/mirrors/node/", true)]
+  #[case("ftp://files.example.com", false)]
+  #[case("file:///local/path", false)]
+  #[case("not-a-url", false)]
+  #[case("https://", false)]
+  fn url_validator_test(#[case] input: &str, #[case] expect_valid: bool) {
+    let result = url_validator(input).unwrap();
+    if expect_valid {
+      assert!(matches!(result, Validation::Valid));
+    } else {
+      assert!(matches!(result, Validation::Invalid(_)));
+    }
+  }
+
+  // ---------- file_validate ----------
+
+  #[rstest]
+  fn file_validate_correct_checksum() {
+    use sha2::Digest;
+    let content = b"hello world";
+    let expected_hash = hex::encode(sha2::Sha256::digest(content));
+
+    let mut tmp = tempfile::tempfile().unwrap();
+    std::io::Write::write_all(&mut tmp, content).unwrap();
+
+    assert_eq!(file_validate(&tmp, &expected_hash).unwrap(), true);
+  }
+
+  #[rstest]
+  fn file_validate_incorrect_checksum() {
+    let content = b"hello world";
+    let mut tmp = tempfile::tempfile().unwrap();
+    std::io::Write::write_all(&mut tmp, content).unwrap();
+
+    assert_eq!(file_validate(&tmp, "deadbeef").unwrap(), false);
+  }
+
+  #[rstest]
+  fn file_validate_empty_file() {
+    use sha2::Digest;
+    let expected_hash = hex::encode(sha2::Sha256::digest(b""));
+
+    let tmp = tempfile::tempfile().unwrap();
+    assert_eq!(file_validate(&tmp, &expected_hash).unwrap(), true);
+  }
+
+  // ---------- get_local_versions ----------
+
+  #[rstest]
+  fn get_local_versions_empty_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let versions = get_local_versions(tmp.path()).unwrap();
+    assert_eq!(versions.len(), 0);
+  }
+
+  #[rstest]
+  fn get_local_versions_filters_non_version_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir(tmp.path().join("v18.0.0")).unwrap();
+    fs::create_dir(tmp.path().join("v20.1.0")).unwrap();
+    fs::create_dir(tmp.path().join("not-a-version")).unwrap();
+    fs::create_dir(tmp.path().join("v1.2")).unwrap();
+    fs::create_dir(tmp.path().join("v1.2.3.4")).unwrap();
+
+    let versions = get_local_versions(tmp.path()).unwrap();
+    assert_eq!(versions, vec!["v18.0.0", "v20.1.0"]);
+  }
+
+  #[rstest]
+  fn get_local_versions_skips_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir(tmp.path().join("v18.0.0")).unwrap();
+    fs::write(tmp.path().join("v20.0.0"), "file not dir").unwrap();
+
+    let versions = get_local_versions(tmp.path()).unwrap();
+    assert_eq!(versions, vec!["v18.0.0"]);
+  }
+
+  #[rstest]
+  fn get_local_versions_sorted() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir(tmp.path().join("v22.0.0")).unwrap();
+    fs::create_dir(tmp.path().join("v18.0.0")).unwrap();
+    fs::create_dir(tmp.path().join("v20.0.0")).unwrap();
+
+    let versions = get_local_versions(tmp.path()).unwrap();
+    assert_eq!(
+      versions,
+      vec!["v18.0.0", "v20.0.0", "v22.0.0"]
+    );
+  }
+
+  // ---------- get_root ----------
+
+  #[rstest]
+  fn get_root_with_none_falls_back_to_current_dir(config: Config) {
+    let mut cfg = config;
+    cfg.root = None;
+    let root = get_root(&cfg).unwrap();
+    assert_eq!(root, env::current_dir().unwrap());
+  }
+
+  // ---------- version_exists ----------
+
+  #[rstest]
+  fn version_exists_latest(sample_db: ReleaseDatabase) {
+    let tmp = tempfile::tempdir().unwrap();
+    let version = VersionSpec::Latest;
+    let (exists, ver) = version_exists(&sample_db, &version, tmp.path()).unwrap();
+    assert_eq!(ver, "v22.0.0");
+    assert_eq!(exists, false);
+  }
+
+  #[rstest]
+  fn version_exists_lts(sample_db: ReleaseDatabase) {
+    let tmp = tempfile::tempdir().unwrap();
+    let version = VersionSpec::Lts;
+    let (exists, ver) = version_exists(&sample_db, &version, tmp.path()).unwrap();
+    assert_eq!(ver, "v20.0.0");
+    assert_eq!(exists, false);
+  }
+
+  #[rstest]
+  fn version_exists_exact_found(sample_db: ReleaseDatabase) {
+    let tmp = tempfile::tempdir().unwrap();
+    let version = VersionSpec::Exact("v18.0.0".to_string());
+    let (exists, ver) = version_exists(&sample_db, &version, tmp.path()).unwrap();
+    assert_eq!(ver, "v18.0.0");
+    assert_eq!(exists, false);
+  }
+
+  #[rstest]
+  fn version_exists_exact_with_local_dir(sample_db: ReleaseDatabase) {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir(tmp.path().join("v18.0.0")).unwrap();
+    let version = VersionSpec::Exact("v18.0.0".to_string());
+    let (exists, ver) = version_exists(&sample_db, &version, tmp.path()).unwrap();
+    assert_eq!(ver, "v18.0.0");
+    assert_eq!(exists, true);
+  }
+
+  #[rstest]
+  fn version_exists_exact_not_in_db(sample_db: ReleaseDatabase) {
+    let tmp = tempfile::tempdir().unwrap();
+    let version = VersionSpec::Exact("v99.0.0".to_string());
+    let result = version_exists(&sample_db, &version, tmp.path());
+    assert!(result.is_err(), "expected error for non-existent version");
+  }
+
+  #[rstest]
+  fn version_exists_latest_empty_db() {
+    let db: ReleaseDatabase = serde_json::from_str("[]").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let version = VersionSpec::Latest;
+    let result = version_exists(&db, &version, tmp.path());
+    assert!(result.is_err(), "expected error for empty database");
+  }
+
+  #[rstest]
+  fn version_exists_lts_empty_db() {
+    let db: ReleaseDatabase = serde_json::from_str("[]").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let version = VersionSpec::Lts;
+    let result = version_exists(&db, &version, tmp.path());
+    assert!(result.is_err(), "expected error for empty database");
+  }
+
+  // ---------- delete_version ----------
+
+  #[rstest]
+  fn delete_version_removes_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ver_dir = tmp.path().join("v18.0.0");
+    fs::create_dir(&ver_dir).unwrap();
+    fs::write(ver_dir.join("node.exe"), "fake").unwrap();
+
+    assert!(ver_dir.exists());
+    delete_version(tmp.path(), "v18.0.0").unwrap();
+    assert!(!ver_dir.exists());
+  }
+
+  #[rstest]
+  fn delete_version_nonexistent_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let result = delete_version(tmp.path(), "v99.0.0");
+    assert!(result.is_err(), "expected error for non-existent version");
+  }
+
+  // ---------- display_or_update_root ----------
+
+  #[rstest]
+  fn display_or_update_root_with_file_path(config: Config) {
+    let tmp = tempfile::tempdir().unwrap();
+    let file_path = tmp.path().join("not_a_dir.txt");
+    fs::write(&file_path, "test").unwrap();
+
+    let result = display_or_update_root(config, Some(&file_path));
+    assert!(result.is_err(), "expected error for file path");
+    assert!(result.unwrap_err().to_string().contains("not a directory"));
+  }
+
+  #[rstest]
+  fn display_or_update_root_with_valid_dir(config: Config) {
+    let tmp = tempfile::tempdir().unwrap();
+    let result = display_or_update_root(config, Some(tmp.path()));
+    assert!(result.is_ok(), "expected success for valid directory");
+  }
+
+  #[rstest]
+  fn display_or_update_root_none_with_root_set(config: Config) {
+    let result = display_or_update_root::<&str>(config, None);
+    assert!(result.is_ok(), "expected success when displaying current root");
+  }
+
+  #[rstest]
+  fn display_or_update_root_none_with_no_root() {
+    let config = Config {
+      root: None,
+      ..Default::default()
+    };
+    let result = display_or_update_root::<&str>(config, None);
+    assert!(result.is_ok(), "expected success when root is None");
+  }
+
+  // ---------- VERSION_REGEX ----------
+
+  #[rstest]
+  #[case("v1.0.0", true)]
+  #[case("v18.16.0", true)]
+  #[case("v24.2.2", true)]
+  #[case("1.0.0", false)]
+  #[case("v1.0", false)]
+  #[case("v1.0.0.0", false)]
+  #[case("vX.Y.Z", false)]
+  #[case("", false)]
+  fn version_regex_test(#[case] input: &str, #[case] expect_match: bool) {
+    assert_eq!(VERSION_REGEX.is_match(input), expect_match);
+  }
+
+  // ---------- NVM_SYMLINK_REGEX ----------
+
+  #[rstest]
+  #[case("C:\\path;%NVM_SYMLINK%;", true)]
+  #[case("C:\\path;%nvm_symlink%;", true)]
+  #[case("C:\\path\\nodejs", false)]
+  #[case("%NVM_SYMLINK%", true)]
+  fn nvm_symlink_regex_test(#[case] input: &str, #[case] expect_match: bool) {
+    assert_eq!(NVM_SYMLINK_REGEX.is_match(input), expect_match);
+  }
+
+  // ---------- fixture: sample_db ----------
+
+  #[fixture]
+  fn sample_db() -> ReleaseDatabase {
+    let json = r#"[
+      {"version": "v22.0.0", "date": "2024-04-01", "lts": false},
+      {"version": "v20.0.0", "date": "2023-04-01", "lts": "Iron"},
+      {"version": "v18.0.0", "date": "2022-04-01", "lts": "Hydrogen"},
+      {"version": "v21.0.0", "date": "2023-10-01", "lts": false}
+    ]"#;
+    serde_json::from_str(json).unwrap()
   }
 }
