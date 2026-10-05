@@ -7,8 +7,17 @@ on:
 
 jobs:
   release-plz-release:
+    strategy:
+      matrix:
+        include:
+          # x86_64 Windows
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # ARM64 Windows
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
     name: Release-plz release
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
     if: ${{ github.repository_owner == 'Ouka2020' }}
     permissions:
       contents: write
@@ -23,8 +32,6 @@ jobs:
       - &install-rust
         name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        # with:
-        #   targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
@@ -34,8 +41,17 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   release-plz-pr:
+    strategy:
+      matrix:
+        include:
+          # x86_64 Windows
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # ARM64 Windows
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
     name: Release-plz PR
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
     if: ${{ github.repository_owner == 'Ouka2020' }}
     permissions:
       pull-requests: write
