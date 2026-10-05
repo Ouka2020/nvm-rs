@@ -8,7 +8,7 @@ on:
 jobs:
   release-plz-release:
     name: Release-plz release
-    runs-on: ubuntu-22.04
+    runs-on: windows-latest
     if: ${{ github.repository_owner == 'Ouka2020' }}
     permissions:
       contents: write
@@ -23,8 +23,8 @@ jobs:
       - &install-rust
         name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+        # with:
+        #   targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
@@ -35,7 +35,7 @@ jobs:
 
   release-plz-pr:
     name: Release-plz PR
-    runs-on: ubuntu-22.04
+    runs-on: windows-latest
     if: ${{ github.repository_owner == 'Ouka2020' }}
     permissions:
       pull-requests: write
