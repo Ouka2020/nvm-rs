@@ -16,7 +16,7 @@ license = "MIT"
 name = "nvm-windows"
 repository = "https://github.com/Ouka2020/nvm-rs"
 rust-version = "1.85"
-version = "0.1.3"
+version = "0.1.4"
 
 [[bin]]
 name = "nvm"
