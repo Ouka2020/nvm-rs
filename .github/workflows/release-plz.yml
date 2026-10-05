@@ -10,11 +10,9 @@ jobs:
     strategy:
       matrix:
         include:
-          # x86_64 Windows
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-          # ARM64 Windows
-          - target: aarch64-pc-windows-msvc
+          - targets: |
+              x86_64-pc-windows-msvc
+              aarch64-pc-windows-msvc
             os: windows-latest
     name: Release-plz release
     runs-on: ${{ matrix.os }}
@@ -44,11 +42,9 @@ jobs:
     strategy:
       matrix:
         include:
-          # x86_64 Windows
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-          # ARM64 Windows
-          - target: aarch64-pc-windows-msvc
+          - targets: |
+              x86_64-pc-windows-msvc
+              aarch64-pc-windows-msvc
             os: windows-latest
     name: Release-plz PR
     runs-on: ${{ matrix.os }}
