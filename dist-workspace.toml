@@ -21,3 +21,11 @@ targets = ["aarch64-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+
+[dist.github-custom-runners.aarch64-pc-windows-msvc]
+runner = "windows-latest"
+# container = "messense/cargo-xwin"
+
+[dist.github-custom-runners.x86_64-pc-windows-msvc]
+runner = "windows-latest"
+# container = "messense/cargo-xwin"
