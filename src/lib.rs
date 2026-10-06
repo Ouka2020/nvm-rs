@@ -287,6 +287,11 @@ fn file_validate(file: &File, sha256_checksum: &str) -> Result<bool> {
 }
 
 pub fn setup(mut config: Config) -> Result {
+  let symlink_default = if let Ok(path) = get_env_symlink() {
+    path.to_string_lossy().to_string()
+  } else {
+    r"C:\Program Files\nodejs".to_string()
+  };
   let node_store_root_default = if let Some(r) = &config.root {
     r.to_string_lossy().to_string()
   } else {
@@ -295,7 +300,7 @@ pub fn setup(mut config: Config) -> Result {
 
   let link_path =
     inquire::Text::new("Which directory to use as the symlink path?")
-      .with_default(r"C:\Program Files\nodejs")
+      .with_default(&symlink_default)
       .with_help_message("Tip: The symlink must not already exist.")
       .with_validator(symlink_validator)
       .prompt()?;
@@ -307,9 +312,15 @@ pub fn setup(mut config: Config) -> Result {
       .with_validator(node_store_root_validator)
       .prompt()?;
 
-  let node_mirror = node_mirror_prompt()?;
+  let node_mirror = node_mirror_prompt(
+    config.node_mirror,
+    vec!["https://npmmirror.com/mirrors/node/"],
+  )?;
 
-  let npm_mirror = npm_mirror_prompt()?;
+  let npm_mirror = npm_mirror_prompt(
+    config.npm_mirror,
+    vec!["https://npmmirror.com/mirrors/npm/"],
+  )?;
 
   std::fs::create_dir_all(&node_store_root)?;
   config.root = Some(node_store_root.into());
@@ -370,21 +381,46 @@ fn url_validator(value: &str) -> ValidatorResult {
   Ok(Validation::Valid)
 }
 
-fn node_mirror_prompt() -> Result<Option<Url>> {
-  let node_mirror_list = vec!["https://npmmirror.com/mirrors/node/"];
+fn node_mirror_prompt(
+  default_url: Option<Url>,
+  mirror_list: Vec<&str>,
+) -> Result<Option<Url>> {
+  // let default_mirror_list = vec!["https://npmmirror.com/mirrors/node/"];
+
+  // let node_mirror_list = mirror_list.unwrap_or(default_mirror_list);
+
+  let index = default_url
+    .as_ref()
+    .and_then(|url| mirror_list.iter().position(|&x| x == url.as_str()))
+    .map(|v| v + 1);
+
+  // if let Some(url) = default_url {
+  //   let index = node_mirror_list.iter().position(|&x| x == url.as_str());
+  // }
 
   mirror_prompt(
-    node_mirror_list,
+    mirror_list,
+    index,
     "Which mirror to use for nodejs?",
     "Please input the node mirror address:",
   )
 }
 
-fn npm_mirror_prompt() -> Result<Option<Url>> {
-  let npm_mirror_list = vec!["https://npmmirror.com/mirrors/npm/"];
+fn npm_mirror_prompt(
+  default_url: Option<Url>,
+  mirror_list: Vec<&str>,
+) -> Result<Option<Url>> {
+  // let default_mirror_list = vec!["https://npmmirror.com/mirrors/npm/"];
+  // let npm_mirror_list = mirror_list.unwrap_or(default_mirror_list);
+
+  let index = default_url
+    .as_ref()
+    .and_then(|url| mirror_list.iter().position(|&x| x == url.as_str()))
+    .map(|v| v + 1);
 
   mirror_prompt(
-    npm_mirror_list,
+    mirror_list,
+    index,
     "Which mirror to use for npm?",
     "Please input the npm mirror address:",
   )
@@ -415,7 +451,8 @@ fn npm_mirror_prompt() -> Result<Option<Url>> {
 ///   (e.g., by pressing `Ctrl+C` / `Esc`) or when an underlying I/O error occurs.
 ///   The error is typically converted from an `inquire` error.
 fn mirror_prompt(
-  mut options: Vec<&'static str>,
+  mut options: Vec<&str>,
+  default_index: Option<usize>,
   select_prompt: &str,
   text_prompt: &str,
 ) -> Result<Option<Url>> {
@@ -426,7 +463,9 @@ fn mirror_prompt(
   // Append "custom" at the tail
   options.push("custom");
 
-  let mirror = inquire::Select::new(select_prompt, options).prompt()?;
+  let mirror = inquire::Select::new(select_prompt, options)
+    .with_starting_cursor(default_index.unwrap_or(0))
+    .prompt()?;
   match mirror {
     "none" => Ok(None),
     "custom" => {

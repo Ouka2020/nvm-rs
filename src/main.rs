@@ -14,13 +14,9 @@ use nvm_windows::{
 use nvm_windows::log_init;
 
 #[cfg(windows)]
-unsafe extern "system" {
-  fn AttachConsole(dwProcessId: u32) -> i32;
-  fn FreeConsole() -> i32;
-}
-
-#[cfg(windows)]
-const ATTACH_PARENT_PROCESS: u32 = 0xFFFFFFFF;
+use windows_sys::Win32::System::Console::{
+  ATTACH_PARENT_PROCESS, AttachConsole, FreeConsole,
+};
 
 fn main() -> Result<()> {
   // Attach to parent console for output
