@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(windows))]
 compile_error!("only windows is supported.");
 
 use clap::Parser;
@@ -13,7 +13,23 @@ use nvm_windows::{
 #[cfg(feature = "debug")]
 use nvm_windows::log_init;
 
+#[cfg(windows)]
+unsafe extern "system" {
+  fn AttachConsole(dwProcessId: u32) -> i32;
+  fn FreeConsole() -> i32;
+}
+
+#[cfg(windows)]
+const ATTACH_PARENT_PROCESS: u32 = 0xFFFFFFFF;
+
 fn main() -> Result<()> {
+  // Attach to parent console for output
+  #[cfg(windows)]
+  unsafe {
+    FreeConsole();
+    AttachConsole(ATTACH_PARENT_PROCESS);
+  }
+
   #[cfg(feature = "debug")]
   log_init();
 

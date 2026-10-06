@@ -8,7 +8,7 @@ use std::{
   time::Duration,
 };
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use comfy_table::{Cell, CellAlignment, Table, presets};
 use indicatif::{ProgressBar, ProgressStyle};
 use inquire::validator::Validation;
@@ -21,7 +21,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use winreg::{
   RegKey, RegValue,
-  enums::{HKEY_CURRENT_USER, RegType},
+  enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, RegType},
 };
 use zip::ZipArchive;
 
@@ -70,7 +70,7 @@ static NVM_SYMLINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 pub type Result<T = ()> = anyhow::Result<T>;
 
 pub fn activate_symlink(config: Config) -> Result {
-  let symlink = get_nvm_symlink()?;
+  let symlink = get_env_symlink()?;
   if let Ok(metadata) = fs::symlink_metadata(&symlink)
     && metadata.is_symlink()
   {
@@ -110,12 +110,11 @@ where
 }
 
 pub fn deactivate_symlink() -> Result {
-  let symlink = get_nvm_symlink()?;
+  let symlink = get_env_symlink()?;
   let Ok(_) = fs::symlink_metadata(&symlink) else {
     println!("node is already deactivated.");
     return Ok(());
   };
-
   delete_junction_link(symlink)?;
 
   println!("node is deactivated.");
@@ -129,10 +128,8 @@ where
 {
   let path = link.as_ref();
   log::debug!("delete link: {:?}", path);
-  // The link might not exist, so ignore failed deletion.
-  if let Err(e) = fs::remove_dir(path) {
-    log::debug!("remove_dir failed: {e}");
-  }
+
+  fs::remove_dir(path)?;
 
   Ok(())
 }
@@ -290,6 +287,12 @@ fn file_validate(file: &File, sha256_checksum: &str) -> Result<bool> {
 }
 
 pub fn setup(mut config: Config) -> Result {
+  let node_store_root_default = if let Some(r) = &config.root {
+    r.to_string_lossy().to_string()
+  } else {
+    config.dir.data_local_dir().to_string_lossy().to_string()
+  };
+
   let link_path =
     inquire::Text::new("Which directory to use as the symlink path?")
       .with_default(r"C:\Program Files\nodejs")
@@ -299,7 +302,7 @@ pub fn setup(mut config: Config) -> Result {
 
   let node_store_root =
     inquire::Text::new("Which directory to use as the node store root?")
-      .with_default(&config.dir.data_local_dir().to_string_lossy())
+      .with_default(&node_store_root_default)
       // .with_help_message("Tip: The node store root must not already exist.")
       .with_validator(node_store_root_validator)
       .prompt()?;
@@ -313,7 +316,7 @@ pub fn setup(mut config: Config) -> Result {
   config.node_mirror = node_mirror;
   config.npm_mirror = npm_mirror;
 
-  update_environment(link_path)?;
+  update_environment(&link_path)?;
 
   log::debug!("config: {:?}", config);
   config.save()?;
@@ -443,7 +446,7 @@ fn mirror_prompt(
 /// A string, the version number.
 /// (e.g. "v24.2.2")
 pub fn get_current_version() -> Option<String> {
-  let Ok(symlink) = get_nvm_symlink() else {
+  let Ok(symlink) = get_env_symlink() else {
     return None;
   };
   // 1. Convert the path to a wide string (null-terminated).
@@ -541,15 +544,20 @@ where
   Ok(versions)
 }
 
-fn get_nvm_symlink() -> Result<PathBuf> {
-  match env::var("NVM_SYMLINK") {
-    Ok(path) => Ok(path.into()),
-    Err(e) => {
-      log::error!("get nvm symlink failed: {:?}", e);
-      bail!("get nvm symlink failed. use 'nvm setup' to set it up.");
-    }
-  }
+fn get_env_symlink() -> Result<PathBuf> {
+  env::var("NVM_SYMLINK")
+    .map(PathBuf::from)
+    .map_err(|e| anyhow!("get nvm symlink failed: {:?}", e))
 }
+
+// fn get_reg_symlink() -> Result<PathBuf> {
+//   let root_regkey = RegKey::predef(HKEY_CURRENT_USER);
+//   let env_regkey =
+//     root_regkey.open_subkey_with_flags("Environment", KEY_READ)?;
+//   let value: String = env_regkey.get_value("NVM_SYMLINK")?;
+
+//   Ok(value.into())
+// }
 
 fn get_root(config: &Config) -> Result<PathBuf> {
   Ok(match &config.root {
@@ -659,8 +667,12 @@ where
 }
 
 pub fn list_local_versions(config: Config) -> Result {
-  let current_version = get_current_version();
-  log::debug!("current version: {:?}", current_version);
+  let current_version = if let Some(version) = get_current_version() {
+    version
+  } else {
+    "".to_string()
+  };
+  log::debug!("current version: {}", current_version);
 
   let path = get_root(&config)?;
   let versions = get_local_versions(path)?;
@@ -674,7 +686,7 @@ pub fn list_local_versions(config: Config) -> Result {
       log::debug!("found version: {version}");
 
       print!("    {}", version);
-      if current_version.as_deref() == Some(version.as_str()) {
+      if current_version == version {
         println!(" <- In use");
       } else {
         println!();
@@ -839,7 +851,7 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
 
   let node_path = root.join(&ver).clean();
 
-  reset_junction_link(get_nvm_symlink()?, node_path)?;
+  reset_junction_link(get_env_symlink()?, node_path)?;
 
   println!("switch to {} success.", ver);
 
@@ -942,10 +954,10 @@ where
   Ok(())
 }
 
-fn update_environment(symlink: impl AsRef<Path>) -> Result {
-  let symlink = symlink.as_ref().to_string_lossy().to_string();
+fn update_environment(symlink: &str) -> Result {
+  // let symlink = symlink.as_ref().to_string_lossy().to_string();
   let root = RegKey::predef(HKEY_CURRENT_USER);
-  let (env, _) = root.create_subkey("Environment")?;
+  let env = root.open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)?;
   env.set_value("NVM_SYMLINK", &symlink)?;
   let mut path: String = env.get_value("Path")?;
 
@@ -1002,7 +1014,7 @@ mod tests {
     let saved = env::var("NVM_SYMLINK").ok();
     unsafe { env::set_var("NVM_SYMLINK", r"C:\Program Files\nodejs") };
 
-    let nvm_symlink = get_nvm_symlink().unwrap();
+    let nvm_symlink = get_env_symlink().unwrap();
     assert_eq!(nvm_symlink, PathBuf::from(r"C:\Program Files\nodejs"));
 
     // Restore
@@ -1021,7 +1033,7 @@ mod tests {
     // SAFETY: no other thread should be reading/writing this env var.
     unsafe { env::remove_var("NVM_SYMLINK") };
 
-    let result = get_nvm_symlink();
+    let result = get_env_symlink();
     assert!(result.is_err());
     assert!(
       result
@@ -1296,7 +1308,7 @@ mod tests {
   // ---------- delete_junction_link ----------
 
   #[rstest]
-  fn delete_junction_link_nonexistent_is_ok() {
+  fn delete_junction_link_nonexistent_is_ok(_config: Config) {
     let tmp = tempfile::tempdir().unwrap();
     let nonexistent = tmp.path().join("does_not_exist");
     // Deleting a non-existent link should still succeed (the function
