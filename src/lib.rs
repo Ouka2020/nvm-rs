@@ -381,6 +381,18 @@ fn url_validator(value: &str) -> ValidatorResult {
   Ok(Validation::Valid)
 }
 
+fn mirror_index(list: &Vec<&str>, url: Option<Url>) -> usize {
+  let Some(url) = url else {
+    return 0;
+  };
+  let url = url.as_str();
+
+  match list.iter().position(|&x| x == url) {
+    Some(index) => index + 1,
+    None => 0,
+  }
+}
+
 fn node_mirror_prompt(
   default_url: Option<Url>,
   mirror_list: Vec<&str>,
@@ -388,11 +400,11 @@ fn node_mirror_prompt(
   // let default_mirror_list = vec!["https://npmmirror.com/mirrors/node/"];
 
   // let node_mirror_list = mirror_list.unwrap_or(default_mirror_list);
-
-  let index = default_url
-    .as_ref()
-    .and_then(|url| mirror_list.iter().position(|&x| x == url.as_str()))
-    .map(|v| v + 1);
+  let index = mirror_index(&mirror_list, default_url);
+  // let index = default_url
+  //   .as_ref()
+  //   .and_then(|url| mirror_list.iter().position(|&x| x == url.as_str()))
+  //   .map(|v| v + 1);
 
   // if let Some(url) = default_url {
   //   let index = node_mirror_list.iter().position(|&x| x == url.as_str());
@@ -413,10 +425,11 @@ fn npm_mirror_prompt(
   // let default_mirror_list = vec!["https://npmmirror.com/mirrors/npm/"];
   // let npm_mirror_list = mirror_list.unwrap_or(default_mirror_list);
 
-  let index = default_url
-    .as_ref()
-    .and_then(|url| mirror_list.iter().position(|&x| x == url.as_str()))
-    .map(|v| v + 1);
+  let index = mirror_index(&mirror_list, default_url);
+  // let index = default_url
+  //   .as_ref()
+  //   .and_then(|url| mirror_list.iter().position(|&x| x == url.as_str()))
+  //   .map(|v| v + 1);
 
   mirror_prompt(
     mirror_list,
@@ -452,7 +465,7 @@ fn npm_mirror_prompt(
 ///   The error is typically converted from an `inquire` error.
 fn mirror_prompt(
   mut options: Vec<&str>,
-  default_index: Option<usize>,
+  default_index: usize,
   select_prompt: &str,
   text_prompt: &str,
 ) -> Result<Option<Url>> {
@@ -464,7 +477,7 @@ fn mirror_prompt(
   options.push("custom");
 
   let mirror = inquire::Select::new(select_prompt, options)
-    .with_starting_cursor(default_index.unwrap_or(0))
+    .with_starting_cursor(default_index)
     .prompt()?;
   match mirror {
     "none" => Ok(None),
