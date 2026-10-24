@@ -1,7 +1,7 @@
 #[cfg(not(windows))]
 compile_error!("only windows is supported.");
 
-use clap::Parser;
+use clap::FromArgMatches;
 use nvm_windows::model::{CliArgs, Commands, Config};
 use nvm_windows::{
   Result, activate_symlink, deactivate_symlink, display_current,
@@ -13,24 +13,27 @@ use nvm_windows::{
 #[cfg(feature = "debug")]
 use nvm_windows::log_init;
 
-#[cfg(windows)]
 use windows_sys::Win32::System::Console::{
-  ATTACH_PARENT_PROCESS, AttachConsole, FreeConsole,
+  ATTACH_PARENT_PROCESS, AttachConsole, FreeConsole, SetConsoleOutputCP,
 };
+
+use windows_sys::Win32::Globalization::CP_UTF8;
 
 fn main() -> Result<()> {
   // Attach to parent console for output
-  #[cfg(windows)]
   unsafe {
     FreeConsole();
     AttachConsole(ATTACH_PARENT_PROCESS);
+    SetConsoleOutputCP(CP_UTF8);
   }
 
   #[cfg(feature = "debug")]
-  log_init();
+  log_init(Some("nvm_windows=debug,nvm=debug"));
 
-  let args = CliArgs::parse();
+  let matches = CliArgs::command().get_matches();
+  let args = CliArgs::from_arg_matches(&matches)?;
   log::debug!("args: {:?}", args);
+
   let config = Config::load()?;
   log::debug!("config: {:?}", config);
   if !matches!(args.command, Commands::Setup) {

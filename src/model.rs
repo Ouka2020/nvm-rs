@@ -6,7 +6,7 @@ use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use clap::{Parser, Subcommand};
+use clap::{Arg, ArgMatches, Command, FromArgMatches};
 use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
@@ -17,11 +17,159 @@ use windows_sys::Win32::System::Threading::{
   GetCurrentProcess, IsWow64Process2,
 };
 
-#[derive(Parser, Debug)]
-#[command(version, about)]
+#[derive(Debug)]
 pub struct CliArgs {
-  #[command(subcommand)]
   pub command: Commands,
+}
+
+impl CliArgs {
+  pub fn command() -> Command {
+    Command::new("nvm")
+      .version(env!("CARGO_PKG_VERSION"))
+      .about(env!("CARGO_PKG_DESCRIPTION"))
+      .subcommand_required(true)
+      .subcommand(
+        Command::new("install")
+          .visible_alias("i")
+          .about("Install the target node version.")
+          .arg(
+            Arg::new("version")
+              .help("The version can be a specific version, \"latest\" for the latest current version, or \"lts\" for the most recent LTS version. [possible values: <semver>(eg: 1.1.0), lts, latest]")
+              .required(true)
+              .index(1),
+          )
+          .arg(
+            Arg::new("skip")
+              .short('s')
+              .long("skip")
+              .help("Skip validation of the downloaded file.")
+              .action(clap::ArgAction::SetTrue),
+          ),
+      )
+      .subcommand(
+        Command::new("uninstall")
+          .visible_alias("un")
+          .about("The version must be a specific version.")
+          .arg(
+            Arg::new("version")
+              .help("The version to uninstall.")
+              .required(true)
+              .index(1),
+          ),
+      )
+      .subcommand(
+        Command::new("list")
+          .visible_alias("ls")
+          .about("List the node.js installations.")
+          .arg(
+            Arg::new("remote")
+              .short('r')
+              .long("remote")
+              .help("Show online available versions.")
+              .action(clap::ArgAction::SetTrue),
+          ),
+      )
+      .subcommand(Command::new("on").about("Enable node.js version management."))
+      .subcommand(Command::new("off").about("Disable node.js version management."))
+      .subcommand(
+        Command::new("root")
+          .about("Set the directory where nvm should store different versions of node.js.\nIf <path> is not set, the current root will be displayed.")
+          .arg(Arg::new("path").help("The path to set as the root directory.").index(1)),
+      )
+      .subcommand(Command::new("current").about("Display active version."))
+      .subcommand(
+        Command::new("node-mirror")
+          .about("Set the node mirror. Defaults to https://nodejs.org/dist/. Leave [url] blank to use default url.")
+          .arg(Arg::new("url").help("The node mirror to use. Leave [url] blank to use default url.").index(1)),
+      )
+      .subcommand(
+        Command::new("npm-mirror")
+          .about("Set the npm mirror. Defaults to https://github.com/npm/cli/archive/. Leave [url] blank to use default url.")
+          .arg(Arg::new("url").help("The npm mirror to use. Leave [url] blank to use default url.").index(1)),
+      )
+      .subcommand(
+        Command::new("use")
+          .about("Switch to use the specified version. Optionally use \"latest\", \"lts\", or \"newest\".\n\"newest\" is the latest installed version. Optionally specify 32/64bit architecture.\nnvm use <arch> will continue using the selected version, but switch to 32/64 bit mode.")
+          .arg(
+            Arg::new("version")
+              .help("The version to use.")
+              .required(true)
+              .index(1),
+          ),
+      )
+      .subcommand(Command::new("setup").about("Set up the application."))
+  }
+}
+
+impl FromArgMatches for CliArgs {
+  fn from_arg_matches(matches: &ArgMatches) -> clap::error::Result<Self> {
+    let command = match matches.subcommand() {
+      Some(("install", sub_matches)) => Commands::Install {
+        version: sub_matches
+          .get_one::<String>("version")
+          .unwrap()
+          .parse()
+          .map_err(|e: String| {
+            clap::Error::raw(clap::error::ErrorKind::ValueValidation, e)
+          })?,
+        skip: sub_matches.get_flag("skip"),
+      },
+      Some(("uninstall", sub_matches)) => Commands::Uninstall {
+        version: sub_matches
+          .get_one::<String>("version")
+          .unwrap()
+          .parse()
+          .map_err(|e: String| {
+            clap::Error::raw(clap::error::ErrorKind::ValueValidation, e)
+          })?,
+      },
+      Some(("list", sub_matches)) => Commands::List {
+        remote: sub_matches.get_flag("remote"),
+      },
+      Some(("on", _)) => Commands::On,
+      Some(("off", _)) => Commands::Off,
+      Some(("root", sub_matches)) => Commands::Root {
+        path: sub_matches.get_one::<String>("path").map(|s| s.to_string()),
+      },
+      Some(("current", _)) => Commands::Current,
+      Some(("node-mirror", sub_matches)) => Commands::NodeMirror {
+        url: sub_matches
+          .get_one::<String>("url")
+          .map(|s| s.parse::<Url>().unwrap()),
+      },
+      Some(("npm-mirror", sub_matches)) => Commands::NpmMirror {
+        url: sub_matches
+          .get_one::<String>("url")
+          .map(|s| s.parse::<Url>().unwrap()),
+      },
+      Some(("use", sub_matches)) => Commands::Use {
+        version: sub_matches
+          .get_one::<String>("version")
+          .unwrap()
+          .parse()
+          .map_err(|e: String| {
+            clap::Error::raw(clap::error::ErrorKind::ValueValidation, e)
+          })?,
+      },
+      Some(("setup", _)) => Commands::Setup,
+      _ => {
+        return Err(clap::Error::raw(
+          clap::error::ErrorKind::InvalidSubcommand,
+          "No subcommand provided",
+        ));
+      }
+    };
+
+    Ok(CliArgs { command })
+  }
+
+  fn update_from_arg_matches(
+    &mut self,
+    matches: &ArgMatches,
+  ) -> clap::error::Result<()> {
+    *self = Self::from_arg_matches(matches)?;
+    Ok(())
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -54,60 +202,31 @@ impl std::str::FromStr for VersionSpec {
   }
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Debug)]
 pub enum Commands {
   /// Install the target node version.
-  #[command(visible_alias = "i")]
-  Install {
-    /// The version can be a specific version, "latest" for the latest current version, or "lts" for the
-    /// most recent LTS version. [possible values: <semver>(eg: 1.1.0), lts, latest]
-    version: VersionSpec,
-    /// Skip validation of the downloaded file.
-    #[arg(short, long)]
-    skip: bool,
-  },
+  Install { version: VersionSpec, skip: bool },
   /// The version must be a specific version.
-  #[command(visible_alias = "un")]
-  Uninstall {
-    /// The version to uninstall.
-    version: VersionSpec,
-  },
+  Uninstall { version: VersionSpec },
   /// List the node.js installations.
-  #[command(visible_alias = "ls")]
-  List {
-    /// Show online available versions.
-    #[arg(short, long)]
-    remote: bool,
-  },
+  List { remote: bool },
   /// Enable node.js version management.
   On,
   /// Disable node.js version management.
   Off,
   /// Set the directory where nvm should store different versions of node.js.
   /// If <path> is not set, the current root will be displayed.
-  Root {
-    /// The path to set as the root directory.
-    path: Option<String>,
-  },
+  Root { path: Option<String> },
   /// Display active version.
   Current,
   /// Set the node mirror. Defaults to https://nodejs.org/dist/. Leave [url] blank to use default url.
-  NodeMirror {
-    /// The node mirror to use. Leave [url] blank to use default url.
-    url: Option<Url>,
-  },
+  NodeMirror { url: Option<Url> },
   /// Set the npm mirror. Defaults to https://github.com/npm/cli/archive/. Leave [url] blank to use default url.
-  NpmMirror {
-    /// The npm mirror to use. Leave [url] blank to use default url.
-    url: Option<Url>,
-  },
+  NpmMirror { url: Option<Url> },
   /// Switch to use the specified version. Optionally use "latest", "lts", or "newest".
   /// "newest" is the latest installed version. Optionally specify 32/64bit architecture.
   /// nvm use <arch> will continue using the selected version, but switch to 32/64 bit mode.
-  Use {
-    /// The version to use.
-    version: VersionSpec,
-  },
+  Use { version: VersionSpec },
   /// Set up the application.
   Setup,
 }
@@ -217,7 +336,6 @@ pub struct NodeReleaseInfo {
   // #[tabled(skip)]
   // #[serde(rename = "modules")]
   // pub abi_version: Option<String>,
-
   /// Whether this is an LTS (Long Term Support) version
   pub lts: LtsSpec,
   // /// Whether this is a security release
@@ -807,7 +925,9 @@ mod tests {
   #[rstest]
   fn config_get_node_url_with_mirror() {
     let config = Config {
-      node_mirror: Some(Url::parse("https://npmmirror.com/mirrors/node").unwrap()),
+      node_mirror: Some(
+        Url::parse("https://npmmirror.com/mirrors/node").unwrap(),
+      ),
       ..Default::default()
     };
 
@@ -842,7 +962,9 @@ mod tests {
   #[rstest]
   fn config_get_npm_url_with_mirror() {
     let config = Config {
-      npm_mirror: Some(Url::parse("https://npmmirror.com/mirrors/npm").unwrap()),
+      npm_mirror: Some(
+        Url::parse("https://npmmirror.com/mirrors/npm").unwrap(),
+      ),
       ..Default::default()
     };
 

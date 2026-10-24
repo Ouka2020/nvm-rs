@@ -5,6 +5,7 @@
     "FIXEDFILEINFO",
     "hklm",
     "Juntion",
+    "langid",
     "libuv",
     "noyalib",
     "nvmroot",
@@ -13,6 +14,7 @@
     "SHASUMS",
     "subkey",
     "trae",
+    "unic",
     "vtype",
     "winreg",
     "winresource"

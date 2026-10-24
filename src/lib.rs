@@ -1,3 +1,7 @@
+#[cfg(feature = "i18n")]
+pub mod i18n;
+pub mod model;
+
 use std::{
   env::{self},
   ffi::c_void,
@@ -26,25 +30,13 @@ use winreg::{
 use zip::ZipArchive;
 
 use std::sync::LazyLock;
-#[cfg(feature = "debug")]
-use tracing_appender::{
-  non_blocking::WorkerGuard,
-  rolling::{RollingFileAppender, Rotation},
-};
-#[cfg(feature = "debug")]
-use tracing_subscriber::{
-  EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt,
-};
 
 use crate::model::{ArchSpec, Config, ReleaseDatabase, VersionSpec};
 
-pub mod model;
-
 #[cfg(feature = "debug")]
-static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
-
-#[cfg(feature = "debug")]
-const LOG_FILTER: &str = "info,nvm_windows=debug";
+static LOG_GUARD: std::sync::OnceLock<
+  tracing_appender::non_blocking::WorkerGuard,
+> = std::sync::OnceLock::new();
 
 static HTTP_CLIENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
   let agent_config = ureq::Agent::config_builder()
@@ -69,24 +61,103 @@ static NVM_SYMLINK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 pub type Result<T = ()> = anyhow::Result<T>;
 
+/// Translate a message by its id from the loaded fluent bundle.
+///
+/// - `tr!("key", "fallback")` — look up the message by key; when the `i18n`
+///   feature is disabled, return the fallback text as-is.
+/// - `tr!("key", "fallback", name = value)` — interpolate named arguments
+///   into placeholders such as `{$name}` declared in `*.ftl`. Without the
+///   feature, format the fallback text positionally with the values
+///   (`format!("fallback {}", value)`).
+/// - `tr!("key", "fallback", a, b)` — positional-only form: without the
+///   feature, format the fallback text (`format!("fallback {}", a, b)`);
+///   in i18n builds the format arguments are ignored.
+///
+/// The key must match a message id in the .ftl resource; the call panics if
+/// it is missing from the bundle (i18n builds only).
+#[macro_export]
+macro_rules! tr {
+  // Translate, or return the fallback text: tr!("key", "fallback")
+  ($key:expr, $msg:expr $(,)?) => {{
+    #[cfg(feature = "i18n")]
+    {
+      let t = $crate::i18n::t();
+      t.get_message($key)
+    }
+    #[cfg(not(feature = "i18n"))]
+    $msg
+  }};
+
+  // With named arguments: tr!("key", "fallback", name = value)
+  ($key:expr, $msg:expr, $($arg_key:ident = $value:expr),+ $(,)?) => {{
+    #[cfg(feature = "i18n")]
+    {
+      let t = $crate::i18n::t();
+      let mut args = fluent::FluentArgs::new();
+      // Argument names are ident; convert them to the string form that
+      // fluent placeholders expect.
+      $(args.set(stringify!($arg_key), $value);)+
+      t.get_message_with_args($key, &args)
+    }
+    #[cfg(not(feature = "i18n"))]
+    format!($msg, $($value),+)
+  }};
+
+  // With positional format args: tr!("key", "fallback", a, b)
+  ($key:expr, $msg:expr, $($fmt_arg:expr),+ $(,)?) => {{
+    #[cfg(feature = "i18n")]
+    {
+      let t = $crate::i18n::t();
+      t.get_message($key)
+    }
+    #[cfg(not(feature = "i18n"))]
+    format!($msg, $($fmt_arg),*)
+  }};
+}
+
+/// Print a translated message; when the `i18n` feature is disabled, print the
+/// fallback text instead.
+///
+/// A thin wrapper over [`tr!`]: accepts the same forms and prints the result.
+///
+/// - `tp!("key", "fallback")`
+/// - `tp!("key", "fallback", name = value)`
+/// - `tp!("key", "fallback", a, b)`
+macro_rules! tp {
+  ($($args:tt)*) => {
+    println!("{}", tr!($($args)*));
+  };
+}
+
 pub fn activate_symlink(config: Config) -> Result {
   let symlink = get_env_symlink()?;
   if let Ok(metadata) = fs::symlink_metadata(&symlink)
     && metadata.is_symlink()
   {
-    println!("node is already activated.");
+    tp!(
+      "activate_symlink_is_activated",
+      "node is already activated."
+    );
+
     return Ok(());
   }
 
   let root = get_root(&config)?;
   let versions = get_local_versions(&root)?;
   let Some(last) = versions.last() else {
-    bail!("no node version installed");
+    bail!(tr!(
+      "activate_symlink_no_version",
+      "no node version installed"
+    ));
   };
 
   create_junction_link(symlink, root.join(last))?;
 
-  println!("node {} is activated.", last);
+  tp!(
+    "activate_symlink_success",
+    "node {} is activated.",
+    version = last.as_str()
+  );
 
   Ok(())
 }
@@ -602,15 +673,6 @@ fn get_env_symlink() -> Result<PathBuf> {
     .map_err(|e| anyhow!("get nvm symlink failed: {:?}", e))
 }
 
-// fn get_reg_symlink() -> Result<PathBuf> {
-//   let root_regkey = RegKey::predef(HKEY_CURRENT_USER);
-//   let env_regkey =
-//     root_regkey.open_subkey_with_flags("Environment", KEY_READ)?;
-//   let value: String = env_regkey.get_value("NVM_SYMLINK")?;
-
-//   Ok(value.into())
-// }
-
 fn get_root(config: &Config) -> Result<PathBuf> {
   Ok(match &config.root {
     Some(root) => root.clone(),
@@ -796,7 +858,31 @@ pub fn list_versions(config: Config, is_remote_request: bool) -> Result {
 }
 
 #[cfg(feature = "debug")]
-pub fn log_init() {
+/// 构建过滤规则
+fn build_log_filter(extend_filters: Option<&str>) -> String {
+  let base_filter = "info";
+  #[cfg(debug_assertions)]
+  let filter = if let Some(filters) = extend_filters {
+    format!("{},{}", base_filter, filters)
+  } else {
+    base_filter.to_string()
+  };
+  #[cfg(not(debug_assertions))]
+  let filter = base_filter.to_string();
+
+  #[cfg(debug_assertions)]
+  eprintln!("log_filter: {}", filter);
+
+  filter
+}
+
+#[cfg(feature = "debug")]
+pub fn log_init(extend_filters: Option<&str>) {
+  use tracing_appender::rolling::{RollingFileAppender, Rotation};
+  use tracing_subscriber::{
+    EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt,
+  };
+
   // 1. Rolling file appender (daily rotation, retain 30 days)
   std::fs::create_dir_all("./logs").expect("failed to create logs directory");
   let file_appender = RollingFileAppender::builder()
@@ -815,11 +901,12 @@ pub fn log_init() {
   LOG_GUARD.set(guard).expect("logging already initialized");
 
   // 2. Build layers
+  let log_filter = build_log_filter(extend_filters);
   // Console: colored, human-readable, INFO and above
   let console_layer = fmt::layer()
     .with_writer(std::io::stderr)
     .pretty()
-    .with_filter(EnvFilter::new(LOG_FILTER));
+    .with_filter(EnvFilter::new(&log_filter));
 
   // File: no color, with timestamps, DEBUG and above (more detailed)
   let file_layer = fmt::layer()
@@ -827,7 +914,7 @@ pub fn log_init() {
     .with_ansi(false)
     .with_target(true)
     .with_line_number(true)
-    .with_filter(EnvFilter::new(LOG_FILTER));
+    .with_filter(EnvFilter::new(log_filter));
 
   // 3. Combine and initialize
   tracing_subscriber::registry()
@@ -1057,6 +1144,21 @@ mod tests {
       ),
       ..Default::default()
     }
+  }
+
+  // ---------- tr ----------
+
+  // The i18n path panics on missing keys, so only the non-i18n fallback
+  // forms are testable offline.
+  #[cfg(not(feature = "i18n"))]
+  #[test]
+  fn tr_fallback_test() {
+    assert_eq!(tr!("any_key", "plain fallback"), "plain fallback");
+    assert_eq!(tr!("any_key", "display {}", "vle"), "display vle");
+    assert_eq!(
+      tr!("any_key", "{} and {}", "a", "b"),
+      "a and b".to_string()
+    );
   }
 
   // ---------- get_nvm_symlink ----------
