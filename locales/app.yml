@@ -1,5 +1,0 @@
-_version: 2
-messages.hello:
-  en: Hello, %{name}
-  zh-CN: 你好，%{name}
-  zh-TW: 你好，%{name}

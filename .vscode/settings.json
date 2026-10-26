@@ -18,5 +18,9 @@
     "vtype",
     "winreg",
     "winresource"
+  ],
+  "rust-analyzer.cargo.features": [
+    "default",
+    "i18n"
   ]
 }

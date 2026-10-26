@@ -63,69 +63,103 @@ pub type Result<T = ()> = anyhow::Result<T>;
 
 /// Translate a message by its id from the loaded fluent bundle.
 ///
-/// - `tr!("key", "fallback")` — look up the message by key; when the `i18n`
+/// - `ts!("fallback", "key")` — look up the message by key; when the `i18n`
 ///   feature is disabled, return the fallback text as-is.
-/// - `tr!("key", "fallback", name = value)` — interpolate named arguments
+/// - `ts!("fallback", "key", name = value)` — interpolate named arguments
 ///   into placeholders such as `{$name}` declared in `*.ftl`. Without the
 ///   feature, format the fallback text positionally with the values
 ///   (`format!("fallback {}", value)`).
-/// - `tr!("key", "fallback", a, b)` — positional-only form: without the
-///   feature, format the fallback text (`format!("fallback {}", a, b)`);
-///   in i18n builds the format arguments are ignored.
+///
+/// # Argument order
+///
+/// The fallback text comes FIRST and the key SECOND — the reverse of most
+/// lookup APIs. Double-check the order when writing or migrating calls.
+///
+/// # format! limitations
+///
+/// Without the `i18n` feature the fallback text is fed to `format!`:
+///
+/// - the `{}` placeholders must match the value count and order, or the
+///   call panics at runtime;
+/// - the named form (`name = value`) drops the names and formats the
+///   values positionally, so the fallback must use `{}`, not `{name}`;
+/// - literal braces in the output must be escaped as `{{` and `}}`.
 ///
 /// The key must match a message id in the .ftl resource; the call panics if
 /// it is missing from the bundle (i18n builds only).
 #[macro_export]
-macro_rules! tr {
-  // Translate, or return the fallback text: tr!("key", "fallback")
-  ($key:expr, $msg:expr $(,)?) => {{
-    #[cfg(feature = "i18n")]
-    {
-      let t = $crate::i18n::t();
-      t.get_message($key)
-    }
-    #[cfg(not(feature = "i18n"))]
+#[cfg(feature = "i18n")]
+macro_rules! ts {
+  // Translate, or return the fallback text: ts!("fallback", "key")
+  ($msg:literal, $key:literal $(,)?) => {{
+    let t = $crate::i18n::t();
+    t.get_message($key)
+  }};
+
+  // With named arguments: ts!("fallback", "key", name = value)
+  ($msg:literal, $key:literal, $($arg_key:ident = $value:expr),+ $(,)?) => {{
+    let t = $crate::i18n::t();
+    let mut args = fluent::FluentArgs::new();
+    // Argument names are ident; convert them to the string form that
+    // fluent placeholders expect.
+    $(args.set(stringify!($arg_key), $value);)+
+    t.get_message_with_args($key, &args)
+  }};
+}
+
+/// Translate a message by its id from the loaded fluent bundle.
+///
+/// - `ts!("fallback", "key")` — look up the message by key; when the `i18n`
+///   feature is disabled, return the fallback text as-is.
+/// - `ts!("fallback", "key", name = value)` — interpolate named arguments
+///   into placeholders such as `{$name}` declared in `*.ftl`. Without the
+///   feature, format the fallback text positionally with the values
+///   (`format!("fallback {}", value)`).
+///
+/// # Argument order
+///
+/// The fallback text comes FIRST and the key SECOND — the reverse of most
+/// lookup APIs. Double-check the order when writing or migrating calls.
+///
+/// # format! limitations
+///
+/// Without the `i18n` feature the fallback text is fed to `format!`:
+///
+/// - the `{}` placeholders must match the value count and order, or the
+///   call panics at runtime;
+/// - the named form (`name = value`) drops the names and formats the
+///   values positionally, so the fallback must use `{}`, not `{name}`;
+/// - literal braces in the output must be escaped as `{{` and `}}`.
+///
+/// The key must match a message id in the .ftl resource; the call panics if
+/// it is missing from the bundle (i18n builds only).
+#[macro_export]
+#[cfg(not(feature = "i18n"))]
+macro_rules! ts {
+  // Translate, or return the fallback text: ts!("fallback", "key")
+  ($msg:literal, $key:literal $(,)?) => {{
     $msg
   }};
 
-  // With named arguments: tr!("key", "fallback", name = value)
-  ($key:expr, $msg:expr, $($arg_key:ident = $value:expr),+ $(,)?) => {{
-    #[cfg(feature = "i18n")]
-    {
-      let t = $crate::i18n::t();
-      let mut args = fluent::FluentArgs::new();
-      // Argument names are ident; convert them to the string form that
-      // fluent placeholders expect.
-      $(args.set(stringify!($arg_key), $value);)+
-      t.get_message_with_args($key, &args)
-    }
-    #[cfg(not(feature = "i18n"))]
+  // With named arguments: ts!("fallback", "key", name = value)
+  ($msg:literal, $key:literal, $($arg_key:ident = $value:expr),+ $(,)?) => {{
     format!($msg, $($value),+)
-  }};
-
-  // With positional format args: tr!("key", "fallback", a, b)
-  ($key:expr, $msg:expr, $($fmt_arg:expr),+ $(,)?) => {{
-    #[cfg(feature = "i18n")]
-    {
-      let t = $crate::i18n::t();
-      t.get_message($key)
-    }
-    #[cfg(not(feature = "i18n"))]
-    format!($msg, $($fmt_arg),*)
   }};
 }
 
 /// Print a translated message; when the `i18n` feature is disabled, print the
 /// fallback text instead.
 ///
-/// A thin wrapper over [`tr!`]: accepts the same forms and prints the result.
+/// A thin wrapper over [`ts!`]: accepts the same forms and prints the result.
+/// See [`ts!`] for the full contract — in particular the argument order
+/// (fallback text FIRST, key SECOND) and the `format!` limitations that
+/// apply to the fallback text without the feature.
 ///
-/// - `tp!("key", "fallback")`
-/// - `tp!("key", "fallback", name = value)`
-/// - `tp!("key", "fallback", a, b)`
+/// - `tp!("fallback", "key")`
+/// - `tp!("fallback", "key", name = value)`
 macro_rules! tp {
   ($($args:tt)*) => {
-    println!("{}", tr!($($args)*));
+    println!("{}", ts!($($args)*));
   };
 }
 
@@ -135,8 +169,8 @@ pub fn activate_symlink(config: Config) -> Result {
     && metadata.is_symlink()
   {
     tp!(
-      "activate_symlink_is_activated",
-      "node is already activated."
+      "node is already activated.",
+      "activate_symlink_is_activated"
     );
 
     return Ok(());
@@ -145,17 +179,17 @@ pub fn activate_symlink(config: Config) -> Result {
   let root = get_root(&config)?;
   let versions = get_local_versions(&root)?;
   let Some(last) = versions.last() else {
-    bail!(tr!(
-      "activate_symlink_no_version",
-      "no node version installed"
+    bail!(ts!(
+      "no node version installed",
+      "activate_symlink_no_version"
     ));
   };
 
   create_junction_link(symlink, root.join(last))?;
 
   tp!(
-    "activate_symlink_success",
     "node {} is activated.",
+    "activate_symlink_success",
     version = last.as_str()
   );
 
@@ -183,12 +217,15 @@ where
 pub fn deactivate_symlink() -> Result {
   let symlink = get_env_symlink()?;
   let Ok(_) = fs::symlink_metadata(&symlink) else {
-    println!("node is already deactivated.");
+    tp!(
+      "node is already deactivated.",
+      "deactivate_symlink_is_deactivated"
+    );
     return Ok(());
   };
   delete_junction_link(symlink)?;
 
-  println!("node is deactivated.");
+  tp!("node is deactivated.", "deactivate_symlink_success");
 
   Ok(())
 }
@@ -215,15 +252,31 @@ fn delete_version(root: &Path, ver: &str) -> Result {
 
 pub fn display_current() -> Result {
   if let Some(current_version) = get_current_version() {
-    println!("current version is {}", current_version);
+    tp!(
+      "current version is {}",
+      "display_current_version",
+      version = current_version.as_str()
+    );
   } else {
-    println!("No current version.");
+    tp!("No current version.", "display_current_none");
     println!();
-    println!("Tips:");
-    println!(" * Run 'nvm use x.x.x' to set a version.");
-    println!(" * Run 'nvm ls' to list available versions locally.");
-    println!(" * Run 'nvm ls --remote' to list available versions online.");
-    println!(" * Run 'nvm install latest' to install the latest version.");
+    tp!("Tips:", "display_current_tips");
+    tp!(
+      " * Run 'nvm use x.x.x' to set a version.",
+      "display_current_tips_use"
+    );
+    tp!(
+      " * Run 'nvm ls' to list available versions locally.",
+      "display_current_tips_ls_local"
+    );
+    tp!(
+      " * Run 'nvm ls --remote' to list available versions online.",
+      "display_current_tips_ls_remote"
+    );
+    tp!(
+      " * Run 'nvm install latest' to install the latest version.",
+      "display_current_tips_install_latest"
+    );
   }
 
   Ok(())
@@ -239,9 +292,13 @@ pub fn display_or_update_npm_mirror(
   }
 
   if let Some(npm_mirror) = config.npm_mirror {
-    println!("Current NpmMirror: {}", npm_mirror);
+    tp!(
+      "Current NpmMirror: {}",
+      "npm_mirror_current",
+      mirror = npm_mirror.as_str()
+    );
   } else {
-    println!("No NpmMirror set.");
+    tp!("No NpmMirror set.", "npm_mirror_none");
   }
 
   Ok(())
@@ -257,9 +314,13 @@ pub fn display_or_update_node_mirror(
   }
 
   if let Some(node_mirror) = config.node_mirror {
-    println!("Current NodeMirror: {}", node_mirror);
+    tp!(
+      "Current NodeMirror: {}",
+      "node_mirror_current",
+      mirror = node_mirror.as_str()
+    );
   } else {
-    println!("No NodeMirror set.");
+    tp!("No NodeMirror set.", "node_mirror_none");
   }
 
   Ok(())
@@ -272,18 +333,34 @@ where
   if let Some(path) = path {
     let p = path.as_ref();
     if !p.exists() {
-      bail!("path {:?} does not exist", p);
+      bail!(ts!(
+        "path {} does not exist",
+        "root_path_not_exist",
+        path = p.display().to_string()
+      ));
     }
     if !p.is_dir() {
-      bail!("path {:?} is not a directory", p);
+      bail!(ts!(
+        "path {} is not a directory",
+        "root_path_not_dir",
+        path = p.display().to_string()
+      ));
     }
     config.root = Some(p.to_path_buf());
     config.save()?;
-    println!("Current Root: {:?}", p);
+    tp!(
+      "Current Root: {}",
+      "root_current",
+      root = p.display().to_string()
+    );
   } else if let Some(root) = config.root {
-    println!("Current Root: {:?}", root);
+    tp!(
+      "Current Root: {}",
+      "root_current",
+      root = root.display().to_string()
+    );
   } else {
-    println!("No Root set.");
+    tp!("No Root set.", "root_none");
   }
 
   Ok(())
@@ -403,7 +480,10 @@ pub fn setup(mut config: Config) -> Result {
   log::debug!("config: {:?}", config);
   config.save()?;
 
-  println!("Finished. Please restart the console to update the environment.");
+  tp!(
+    "Finished. Please restart the console to update the environment.",
+    "setup_finished"
+  );
 
   Ok(())
 }
@@ -696,7 +776,11 @@ pub fn install_version(
   )?;
   let (exists, ver) = version_exists(&db, &version, &root)?;
   if exists {
-    bail!("version {} already installed", ver);
+    bail!(ts!(
+      "version {} already installed",
+      "install_version_exists",
+      version = ver.as_str()
+    ));
   }
 
   let url = format!("node-{}-win-{}.zip", ver, arch);
@@ -709,28 +793,36 @@ pub fn install_version(
     .and_then(|mut segments| segments.next_back())
     .filter(|s| !s.is_empty())
   else {
-    bail!("invalid url: {url}");
+    bail!(ts!(
+      "invalid url: {}",
+      "install_invalid_url",
+      url = url.as_str()
+    ));
   };
   let mut zip_path = tempfile::tempfile()?;
 
   download_file(&url, &mut zip_path)?;
 
-  print!("checksum...");
+  print!("{}", ts!("checksum...", "checksum_prompt"));
   if !skip_checksum {
     let url = config.get_node_url(&[&ver, "SHASUMS256.txt"]);
     log::debug!("url: {:?}", url);
     let checksum = load_checksum(&url, &ver, &arch)?;
     let valid = file_validate(&zip_path, &checksum)?;
     if !valid {
-      println!("failed.");
-      let msg = format!("sha256 checksum failed: {:?}", file_name);
+      tp!("failed.", "checksum_failed");
+      let msg = ts!(
+        "sha256 checksum failed: {}",
+        "install_checksum_failed",
+        file = file_name
+      );
       log::error!("{}", msg);
       bail!(msg);
     }
 
-    println!("OK.");
+    tp!("OK.", "checksum_ok");
   } else {
-    println!("skip.");
+    tp!("skip.", "checksum_skip");
   }
 
   zip_extract(&zip_path, &root)?;
@@ -740,7 +832,11 @@ pub fn install_version(
   log::debug!("rename {:?} -> {:?}", org_path, dist_path);
   fs::rename(org_path, dist_path)?;
 
-  println!("install {} completed.", ver);
+  tp!(
+    "install {} completed.",
+    "install_success",
+    version = ver.as_str()
+  );
 
   Ok(())
 }
@@ -777,7 +873,11 @@ where
     }
   }
 
-  bail!("checksum not found: {:?}", package_name);
+  bail!(ts!(
+    "checksum not found: {}",
+    "checksum_not_found",
+    package = package_name.as_str()
+  ));
 }
 
 pub fn list_local_versions(config: Config) -> Result {
@@ -792,7 +892,7 @@ pub fn list_local_versions(config: Config) -> Result {
   let versions = get_local_versions(path)?;
 
   if versions.is_empty() {
-    println!("No versions are installed.");
+    tp!("No versions are installed.", "list_local_none");
   } else {
     println!();
 
@@ -801,7 +901,7 @@ pub fn list_local_versions(config: Config) -> Result {
 
       print!("    {}", version);
       if current_version == version {
-        println!(" <- In use");
+        tp!(" <- In use", "list_local_in_use");
       } else {
         println!();
       }
@@ -841,9 +941,11 @@ pub fn list_remote_versions(config: Config) -> Result {
 
   println!("{}", table);
 
-  println!(
-    "\n * Note: The list only shows the latest {} versions. Visit https://nodejs.org/en/ for more info.",
-    LIST_COUNT
+  println!();
+  tp!(
+    " * Note: The list only shows the latest {} versions. Visit https://nodejs.org/en/ for more info.",
+    "list_remote_note",
+    count = LIST_COUNT
   );
 
   Ok(())
@@ -953,7 +1055,11 @@ where
   // Prevent Zip Slip: extracted path must remain within the destination directory
   let out_path = dest_dir.join(entry.mangled_name());
   if !out_path.starts_with(dest_dir) {
-    bail!("illegal path in archive: {}", entry.name());
+    bail!(ts!(
+      "illegal path in archive: {}",
+      "extract_illegal_path",
+      path = entry.name()
+    ));
   }
 
   if entry.is_dir() {
@@ -978,12 +1084,20 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
   let (exists, ver) = version_exists(&db, &version, &root)?;
   let current_ver = get_current_version();
   if !exists {
-    bail!("version {:?} not installed", ver);
+    bail!(ts!(
+      "version {} not installed",
+      "switch_version_not_installed",
+      version = ver.as_str()
+    ));
   }
   if let Some(current_ver) = current_ver
     && current_ver == ver
   {
-    bail!("version {:?} is already used", ver);
+    bail!(ts!(
+      "version {} is already used",
+      "switch_version_already_used",
+      version = ver.as_str()
+    ));
   }
 
   log::debug!("ready switch to {}({})", ver, arch);
@@ -992,7 +1106,11 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
 
   reset_junction_link(get_env_symlink()?, node_path)?;
 
-  println!("switch to {} success.", ver);
+  tp!(
+    "switch to {} success.",
+    "switch_success",
+    version = ver.as_str()
+  );
 
   Ok(())
 }
@@ -1004,23 +1122,36 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
 
   match version {
     VersionSpec::Latest | VersionSpec::Lts => {
-      bail!(
-        "The version must be a specific version. Can not use 'latest' or 'lts' to uninstall."
-      );
+      bail!(ts!(
+        "The version must be a specific version. Can not use 'latest' or 'lts' to uninstall.",
+        "uninstall_need_exact_version"
+      ));
     }
     VersionSpec::Exact(ver) => {
       if !versions.contains(&ver) {
-        bail!("version {:?} not installed", ver);
+        bail!(ts!(
+          "version {} not installed",
+          "uninstall_version_not_installed",
+          version = ver.as_str()
+        ));
       }
       if let Some(current_ver) = get_current_version()
         && current_ver == ver
       {
-        bail!("version {:?} is in use, can not uninstall it", ver);
+        bail!(ts!(
+          "version {} is in use, can not uninstall it",
+          "uninstall_version_in_use",
+          version = ver.as_str()
+        ));
       }
 
       delete_version(&root, &ver)?;
 
-      println!("uninstall {:?} completed.", ver);
+      tp!(
+        "uninstall {} completed.",
+        "uninstall_success",
+        version = ver.as_str()
+      );
     }
   }
 
@@ -1043,21 +1174,25 @@ where
       if let Some(latest_version) = db.latest() {
         latest_version
       } else {
-        bail!("No latest version found.")
+        bail!(ts!("No latest version found.", "version_latest_not_found"))
       }
     }
     VersionSpec::Lts => {
       if let Some(lts_version) = db.latest_lts() {
         lts_version
       } else {
-        bail!("No LTS version found.")
+        bail!(ts!("No LTS version found.", "version_lts_not_found"))
       }
     }
     VersionSpec::Exact(s) => {
       if db.version_exists(s) {
         s.clone()
       } else {
-        bail!("version {:?} not exists.", s)
+        bail!(ts!(
+          "version {} not exists.",
+          "version_not_exists",
+          version = s.as_str()
+        ))
       }
     }
   };
@@ -1152,12 +1287,40 @@ mod tests {
   // forms are testable offline.
   #[cfg(not(feature = "i18n"))]
   #[test]
-  fn tr_fallback_test() {
-    assert_eq!(tr!("any_key", "plain fallback"), "plain fallback");
-    assert_eq!(tr!("any_key", "display {}", "vle"), "display vle");
+  fn ts_fallback_test() {
+    assert_eq!(ts!("plain fallback", "any_key"), "plain fallback");
+  }
+
+  // ---------- en-US resource ----------
+
+  // The en-US resource must parse and resolve; a syntax error or missing
+  // key would panic i18n builds on English systems at runtime.
+  #[cfg(feature = "i18n")]
+  #[test]
+  fn en_us_resource_test() {
+    let i18n = crate::i18n::I18n::init_with_lang_id("en-US");
     assert_eq!(
-      tr!("any_key", "{} and {}", "a", "b"),
-      "a and b".to_string()
+      i18n.get_message("activate_symlink_no_version"),
+      "no node version installed"
+    );
+    assert_eq!(i18n.get_message("checksum_ok"), "OK.");
+    // The StringLiteral placeable must preserve the leading space.
+    assert_eq!(i18n.get_message("list_local_in_use"), " <- In use");
+    assert_eq!(
+      i18n.get_message("display_current_tips_use"),
+      " * Run 'nvm use x.x.x' to set a version."
+    );
+    assert_eq!(
+      i18n.get_message("version_latest_not_found"),
+      "No latest version found."
+    );
+
+    // Region-less English locale (e.g. "en") must resolve too.
+    let i18n = crate::i18n::I18n::init_with_lang_id("en");
+    assert_eq!(i18n.get_message("list_local_in_use"), " <- In use");
+    assert_eq!(
+      i18n.get_message("version_latest_not_found"),
+      "No latest version found."
     );
   }
 
@@ -1456,7 +1619,11 @@ mod tests {
     let result =
       uninstall_version(config, VersionSpec::Exact("v99.99.99".to_string()));
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("not installed"));
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+      err_msg.contains("not installed") || err_msg.contains("未安装"),
+      "unexpected error message: {err_msg}"
+    );
   }
 
   // ---------- delete_junction_link ----------
@@ -1826,7 +1993,11 @@ mod tests {
 
     let result = display_or_update_root(config, Some(&file_path));
     assert!(result.is_err(), "expected error for file path");
-    assert!(result.unwrap_err().to_string().contains("not a directory"));
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+      err_msg.contains("not a directory") || err_msg.contains("不是目录"),
+      "unexpected error message: {err_msg}"
+    );
   }
 
   #[rstest]

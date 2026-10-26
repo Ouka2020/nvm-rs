@@ -5,7 +5,7 @@ use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
 pub(crate) static I18N: OnceLock<I18n> = OnceLock::new();
 
 pub(crate) fn t() -> &'static I18n {
-  I18N.get_or_init(|| I18n::init())
+  I18N.get_or_init(I18n::init)
 }
 
 pub struct FluentI18nProvider<T = fluent::FluentResource> {
@@ -58,21 +58,18 @@ impl FluentI18nProvider {
 
 pub struct I18n {
   inner: FluentI18nProvider,
-  // enable: bool,
 }
 
 impl I18n {
   pub fn init() -> Self {
     I18n {
       inner: FluentI18nProvider::init(&get_locale()),
-      // enable: false,
     }
   }
 
   pub fn init_with_lang_id(lang_id: &str) -> Self {
     I18n {
       inner: FluentI18nProvider::init(lang_id),
-      // enable: false,
     }
   }
 
@@ -89,14 +86,6 @@ impl I18n {
   }
 }
 
-// impl Deref for I18n {
-//   type Target = Box<dyn I18nProvider>;
-
-//   fn deref(&self) -> &Self::Target {
-//     &self.provider
-//   }
-// }
-
 fn get_locale() -> String {
   let mut buf = [0u16; 85];
   let l =
@@ -106,6 +95,6 @@ fn get_locale() -> String {
       .trim_end_matches('\0')
       .to_string()
   } else {
-    "en-US".to_string()
+    "en".to_string()
   }
 }
