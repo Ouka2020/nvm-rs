@@ -67,6 +67,10 @@ pub type Result<T = ()> = anyhow::Result<T>;
 ///   feature is disabled, return the fallback text as-is.
 /// - `ts!("fallback", "key", name = value)` — interpolate named arguments
 ///   into placeholders such as `{$name}` declared in `*.ftl`.
+/// - `ts!("fallback {}", "key", value)` — interpolate positional arguments;
+///   in non-i18n mode they are forwarded to `format!` as-is, while in i18n
+///   mode each positional argument is mapped to a Fluent placeholder named
+///   `{$0}`, `{$1}`, … (the .ftl file must declare matching placeholders).
 ///
 /// # Argument order
 ///
@@ -81,10 +85,9 @@ pub type Result<T = ()> = anyhow::Result<T>;
 ///   call panics at runtime;
 /// - both `{name}` named placeholders (with `name = value` arguments) and
 ///   `{}` positional placeholders work correctly in the fallback text;
-/// - positional arguments (e.g. `ts!("fallback {}", "key", value)`) are
-///   only supported in non-i18n mode; with the `i18n` feature, all
-///   arguments must be named (e.g. `name = value`) because Fluent
-///   placeholders are always named (`{$name}`).
+/// - positional arguments (e.g. `ts!("fallback {}", "key", value)`) work in
+///   both modes: in non-i18n they are forwarded to `format!`, in i18n mode
+///   they are mapped to Fluent placeholders `{$0}`, `{$1}`, …;
 /// - literal braces in the output must be escaped as `{{` and `}}`.
 ///
 /// The key must match a message id in the .ftl resource; the call panics if
@@ -103,6 +106,22 @@ macro_rules! ts {
     let t = $crate::i18n::t();
     let mut args = fluent::FluentArgs::new();
     $(args.set(stringify!($arg_key), $value);)+
+    t.get_message_with_args($key, &args)
+  }};
+
+  // Positional arguments: ts!("fallback {}", "key", value1, value2)
+  // Each positional index is used as the Fluent argument key, so the
+  // corresponding .ftl placeholders should be `{$0}`, `{$1}`, …
+  ($msg:literal, $key:literal, $($value:expr),+ $(,)?) => {{
+    let t = $crate::i18n::t();
+    let mut args = fluent::FluentArgs::new();
+    {
+      let mut _idx: u32 = 0;
+      $(
+        args.set(_idx.to_string(), $value);
+        _idx += 1;
+      )+
+    }
     t.get_message_with_args($key, &args)
   }};
 }
@@ -414,19 +433,26 @@ pub fn setup(mut config: Config) -> Result {
     config.dir.data_local_dir().to_string_lossy().to_string()
   };
 
-  let link_path =
-    inquire::Text::new("Which directory to use as the symlink path?")
-      .with_default(&symlink_default)
-      .with_help_message("Tip: The symlink must not already exist.")
-      .with_validator(symlink_validator)
-      .prompt()?;
+  let link_path = inquire::Text::new(&ts!(
+    "Which directory to use as the symlink path?",
+    "setup_symlink_prompt"
+  ))
+  .with_default(&symlink_default)
+  .with_help_message(&ts!(
+    "Tip: The symlink must already exist.",
+    "setup_symlink_help"
+  ))
+  .with_validator(symlink_validator)
+  .prompt()?;
 
-  let node_store_root =
-    inquire::Text::new("Which directory to use as the node store root?")
-      .with_default(&node_store_root_default)
-      // .with_help_message("Tip: The node store root must not already exist.")
-      .with_validator(node_store_root_validator)
-      .prompt()?;
+  let node_store_root = inquire::Text::new(&ts!(
+    "Which directory to use as the node store root?",
+    "setup_root_prompt"
+  ))
+  .with_default(&node_store_root_default)
+  // .with_help_message("Tip: The node store root must not already exist.")
+  .with_validator(node_store_root_validator)
+  .prompt()?;
 
   let node_mirror = node_mirror_prompt(
     config.node_mirror,
@@ -469,7 +495,11 @@ fn symlink_validator(value: &str) -> ValidatorResult {
   let path = std::path::Path::new(value.trim());
   if path.extension().is_some() {
     return Ok(Validation::Invalid(
-      "The symlink path must be a directory.".into(),
+      ts!(
+        "The symlink path must be a directory.",
+        "symlink_validator_not_dir"
+      )
+      .into(),
     ));
   }
 
@@ -480,7 +510,9 @@ fn node_store_root_validator(value: &str) -> ValidatorResult {
   let path = std::path::Path::new(value.trim());
 
   if path.extension().is_some() {
-    return Ok(Validation::Invalid("Must be a directory.".into()));
+    return Ok(Validation::Invalid(
+      ts!("Must be a directory.", "root_validator_not_dir").into(),
+    ));
   }
 
   Ok(Validation::Valid)
@@ -488,12 +520,18 @@ fn node_store_root_validator(value: &str) -> ValidatorResult {
 
 fn url_validator(value: &str) -> ValidatorResult {
   let Ok(path) = url::Url::parse(value.trim()) else {
-    return Ok(Validation::Invalid("Must be a valid URL.".into()));
+    return Ok(Validation::Invalid(
+      ts!("Must be a valid URL.", "url_validator_invalid").into(),
+    ));
   };
 
   if !matches!(path.scheme(), "https" | "http") || path.host().is_none() {
     return Ok(Validation::Invalid(
-      "Only HTTP and HTTPS protocols are supported.".into(),
+      ts!(
+        "Only HTTP and HTTPS protocols are supported.",
+        "url_validator_protocol"
+      )
+      .into(),
     ));
   }
 
@@ -532,8 +570,14 @@ fn node_mirror_prompt(
   mirror_prompt(
     mirror_list,
     index,
-    "Which mirror to use for nodejs?",
-    "Please input the node mirror address:",
+    &ts!(
+      "Which mirror to use for nodejs?",
+      "node_mirror_select_prompt"
+    ),
+    &ts!(
+      "Please input the node mirror address:",
+      "node_mirror_text_prompt"
+    ),
   )
 }
 
@@ -553,8 +597,11 @@ fn npm_mirror_prompt(
   mirror_prompt(
     mirror_list,
     index,
-    "Which mirror to use for npm?",
-    "Please input the npm mirror address:",
+    &ts!("Which mirror to use for npm?", "npm_mirror_select_prompt"),
+    &ts!(
+      "Please input the npm mirror address:",
+      "npm_mirror_text_prompt"
+    ),
   )
 }
 

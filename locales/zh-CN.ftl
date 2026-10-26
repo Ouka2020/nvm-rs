@@ -17,9 +17,16 @@ npm_mirror_current=当前 NPM 镜像源：{$mirror}
 npm_mirror_none=未设置 NPM 镜像源。
 node_mirror_current=当前 Node 镜像源：{$mirror}
 node_mirror_none=未设置 Node 镜像源。
+node_mirror_select_prompt=使用哪个 Node.js 镜像？
+node_mirror_text_prompt=请输入 Node.js 镜像地址：
+npm_mirror_select_prompt=使用哪个 npm 镜像？
+npm_mirror_text_prompt=请输入 npm 镜像地址：
 root_current=当前根目录：{$root}
 root_none=未设置根目录。
 
+setup_symlink_prompt=使用哪个目录作为符号链接路径？
+setup_symlink_help=提示：符号链接路径必须不存在。
+setup_root_prompt=使用哪个目录作为 Node 存储根目录？
 setup_finished=设置完成。请重启控制台以更新环境变量。
 
 checksum_prompt=校验中...
@@ -54,3 +61,8 @@ uninstall_version_in_use=版本 {$version} 正在使用中，无法卸载。
 version_latest_not_found=未找到最新版本。
 version_lts_not_found=未找到 LTS 版本。
 version_not_exists=版本 {$version} 不存在。
+
+symlink_validator_not_dir=符号链接路径必须是一个目录。
+root_validator_not_dir=必须是一个目录。
+url_validator_invalid=必须是有效的 URL。
+url_validator_protocol=仅支持 HTTP 和 HTTPS 协议。

@@ -22,11 +22,11 @@ version = "0.1.4"
 name = "nvm"
 path = "src/main.rs"
 
-  [package.metadata.winresource]
-  # OriginalFilename = "PROGRAM.EXE"
-  LegalCopyright = "Copyright © 2026"
-  # FileDescription = "ExVS Runner"
-  # ProductName = "ExVS Runner sss"
+[package.metadata.winresource]
+# OriginalFilename = "PROGRAM.EXE"
+LegalCopyright = "Copyright © 2026"
+# FileDescription = "ExVS Runner"
+# ProductName = "ExVS Runner sss"
 
 [build-dependencies]
 winresource = "0"

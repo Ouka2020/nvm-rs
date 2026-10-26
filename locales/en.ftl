@@ -17,9 +17,16 @@ npm_mirror_current=Current NpmMirror: {$mirror}
 npm_mirror_none=No NpmMirror set.
 node_mirror_current=Current NodeMirror: {$mirror}
 node_mirror_none=No NodeMirror set.
+node_mirror_select_prompt=Which mirror to use for nodejs?
+node_mirror_text_prompt=Please input the node mirror address:
+npm_mirror_select_prompt=Which mirror to use for npm?
+npm_mirror_text_prompt=Please input the npm mirror address:
 root_current=Current Root: {$root}
 root_none=No Root set.
 
+setup_symlink_prompt=Which directory to use as the symlink path?
+setup_symlink_help=Tip: The symlink must already exist.
+setup_root_prompt=Which directory to use as the node store root?
 setup_finished=Finished. Please restart the console to update the environment.
 
 checksum_prompt=checksum...
@@ -54,3 +61,8 @@ uninstall_version_in_use=version {$version} is in use, can not uninstall it
 version_latest_not_found=No latest version found.
 version_lts_not_found=No LTS version found.
 version_not_exists=version {$version} not exists.
+
+symlink_validator_not_dir=The symlink path must be a directory.
+root_validator_not_dir=Must be a directory.
+url_validator_invalid=Must be a valid URL.
+url_validator_protocol=Only HTTP and HTTPS protocols are supported.
