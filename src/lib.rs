@@ -67,9 +67,6 @@ pub type Result<T = ()> = anyhow::Result<T>;
 ///   feature is disabled, return the fallback text as-is.
 /// - `ts!("fallback", "key", name = value)` — interpolate named arguments
 ///   into placeholders such as `{$name}` declared in `*.ftl`.
-/// - `ts!("fallback", "key", value1, value2)` — positional arguments are
-///   mapped to numeric indices (`"0"`, `"1"`, …) for Fluent, or passed to
-///   `format!` positionally without the feature.
 ///
 /// # Argument order
 ///
@@ -84,6 +81,10 @@ pub type Result<T = ()> = anyhow::Result<T>;
 ///   call panics at runtime;
 /// - both `{name}` named placeholders (with `name = value` arguments) and
 ///   `{}` positional placeholders work correctly in the fallback text;
+/// - positional arguments (e.g. `ts!("fallback {}", "key", value)`) are
+///   only supported in non-i18n mode; with the `i18n` feature, all
+///   arguments must be named (e.g. `name = value`) because Fluent
+///   placeholders are always named (`{$name}`).
 /// - literal braces in the output must be escaped as `{{` and `}}`.
 ///
 /// The key must match a message id in the .ftl resource; the call panics if
@@ -102,21 +103,6 @@ macro_rules! ts {
     let t = $crate::i18n::t();
     let mut args = fluent::FluentArgs::new();
     $(args.set(stringify!($arg_key), $value);)+
-    t.get_message_with_args($key, &args)
-  }};
-
-  // Positional arguments: ts!("fallback {}", "key", value1, value2)
-  // Each value is stored under its numeric index ("0", "1", …).
-  ($msg:literal, $key:literal, $($value:expr),+ $(,)?) => {{
-    let t = $crate::i18n::t();
-    let mut args = fluent::FluentArgs::new();
-    {
-      let mut _idx: u32 = 0;
-      $(
-        args.set(_idx.to_string(), $value);
-        _idx += 1;
-      )+
-    }
     t.get_message_with_args($key, &args)
   }};
 }
@@ -1304,23 +1290,6 @@ mod tests {
       i18n.get_message("version_latest_not_found"),
       "No latest version found."
     );
-  }
-
-  // ---------- ts! positional args ----------
-
-  // Verify that positional arguments are mapped to numeric indices
-  // correctly ("0", "1", "2") — not stringified expressions.
-  #[cfg(feature = "i18n")]
-  #[test]
-  fn ts_positional_args_test() {
-    let result = ts!(
-      "fallback: {} {} {}",
-      "test_positional_args",
-      "alpha",
-      "beta",
-      "gamma"
-    );
-    assert_eq!(result, "first: alpha, second: beta, third: gamma");
   }
 
   // ---------- get_nvm_symlink ----------
