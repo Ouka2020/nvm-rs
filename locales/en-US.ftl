@@ -54,3 +54,6 @@ uninstall_version_in_use=version {$version} is in use, can not uninstall it
 version_latest_not_found=No latest version found.
 version_lts_not_found=No LTS version found.
 version_not_exists=version {$version} not exists.
+
+# Test message for positional arguments
+test_positional_args=first: {$0}, second: {$1}, third: {$2}

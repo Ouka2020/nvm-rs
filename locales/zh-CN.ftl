@@ -54,3 +54,6 @@ uninstall_version_in_use=版本 {$version} 正在使用中，无法卸载。
 version_latest_not_found=未找到最新版本。
 version_lts_not_found=未找到 LTS 版本。
 version_not_exists=版本 {$version} 不存在。
+
+# Test message for positional arguments
+test_positional_args=第一个：{$0}，第二个：{$1}，第三个：{$2}

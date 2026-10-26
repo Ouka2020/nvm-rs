@@ -66,9 +66,10 @@ pub type Result<T = ()> = anyhow::Result<T>;
 /// - `ts!("fallback", "key")` — look up the message by key; when the `i18n`
 ///   feature is disabled, return the fallback text as-is.
 /// - `ts!("fallback", "key", name = value)` — interpolate named arguments
-///   into placeholders such as `{$name}` declared in `*.ftl`. Without the
-///   feature, format the fallback text positionally with the values
-///   (`format!("fallback {}", value)`).
+///   into placeholders such as `{$name}` declared in `*.ftl`.
+/// - `ts!("fallback", "key", value1, value2)` — positional arguments are
+///   mapped to numeric indices (`"0"`, `"1"`, …) for Fluent, or passed to
+///   `format!` positionally without the feature.
 ///
 /// # Argument order
 ///
@@ -81,8 +82,8 @@ pub type Result<T = ()> = anyhow::Result<T>;
 ///
 /// - the `{}` placeholders must match the value count and order, or the
 ///   call panics at runtime;
-/// - the named form (`name = value`) drops the names and formats the
-///   values positionally, so the fallback must use `{}`, not `{name}`;
+/// - both `{name}` named placeholders (with `name = value` arguments) and
+///   `{}` positional placeholders work correctly in the fallback text;
 /// - literal braces in the output must be escaped as `{{` and `}}`.
 ///
 /// The key must match a message id in the .ftl resource; the call panics if
@@ -90,73 +91,54 @@ pub type Result<T = ()> = anyhow::Result<T>;
 #[macro_export]
 #[cfg(feature = "i18n")]
 macro_rules! ts {
-  // Translate, or return the fallback text: ts!("fallback", "key")
+  // No arguments: ts!("fallback", "key")
   ($msg:literal, $key:literal $(,)?) => {{
     let t = $crate::i18n::t();
     t.get_message($key)
   }};
 
-  // With named arguments: ts!("fallback", "key", name = value)
+  // Named arguments: ts!("fallback", "key", name = value)
   ($msg:literal, $key:literal, $($arg_key:ident = $value:expr),+ $(,)?) => {{
     let t = $crate::i18n::t();
     let mut args = fluent::FluentArgs::new();
-    // Argument names are ident; convert them to the string form that
-    // fluent placeholders expect.
     $(args.set(stringify!($arg_key), $value);)+
+    t.get_message_with_args($key, &args)
+  }};
+
+  // Positional arguments: ts!("fallback {}", "key", value1, value2)
+  // Each value is stored under its numeric index ("0", "1", …).
+  ($msg:literal, $key:literal, $($value:expr),+ $(,)?) => {{
+    let t = $crate::i18n::t();
+    let mut args = fluent::FluentArgs::new();
+    {
+      let mut _idx: u32 = 0;
+      $(
+        args.set(_idx.to_string(), $value);
+        _idx += 1;
+      )+
+    }
     t.get_message_with_args($key, &args)
   }};
 }
 
-/// Translate a message by its id from the loaded fluent bundle.
-///
-/// - `ts!("fallback", "key")` — look up the message by key; when the `i18n`
-///   feature is disabled, return the fallback text as-is.
-/// - `ts!("fallback", "key", name = value)` — interpolate named arguments
-///   into placeholders such as `{$name}` declared in `*.ftl`. Without the
-///   feature, format the fallback text positionally with the values
-///   (`format!("fallback {}", value)`).
-///
-/// # Argument order
-///
-/// The fallback text comes FIRST and the key SECOND — the reverse of most
-/// lookup APIs. Double-check the order when writing or migrating calls.
-///
-/// # format! limitations
-///
-/// Without the `i18n` feature the fallback text is fed to `format!`:
-///
-/// - the `{}` placeholders must match the value count and order, or the
-///   call panics at runtime;
-/// - the named form (`name = value`) drops the names and formats the
-///   values positionally, so the fallback must use `{}`, not `{name}`;
-/// - literal braces in the output must be escaped as `{{` and `}}`.
-///
-/// The key must match a message id in the .ftl resource; the call panics if
-/// it is missing from the bundle (i18n builds only).
 #[macro_export]
 #[cfg(not(feature = "i18n"))]
 macro_rules! ts {
-  // Translate, or return the fallback text: ts!("fallback", "key")
-  ($msg:literal, $key:literal $(,)?) => {{
-    $msg
+  // Named arguments: ts!("fallback {name}", "key", name = value)
+  ($msg:literal, $key:literal, $($arg_key:ident = $value:expr),+ $(,)?) => {{
+    format!($msg, $($arg_key = $value),+)
   }};
 
-  // With named arguments: ts!("fallback", "key", name = value)
-  ($msg:literal, $key:literal, $($arg_key:ident = $value:expr),+ $(,)?) => {{
-    format!($msg, $($value),+)
+  // No arguments or positional arguments — both collapse to the same
+  // behaviour: `format!` with zero-or-more positional values.
+  ($msg:literal, $key:literal $(, $value:expr)* $(,)?) => {{
+    format!($msg $(, $value)*)
   }};
 }
 
-/// Print a translated message; when the `i18n` feature is disabled, print the
-/// fallback text instead.
+/// Print a translated message via [`ts!`].
 ///
-/// A thin wrapper over [`ts!`]: accepts the same forms and prints the result.
-/// See [`ts!`] for the full contract — in particular the argument order
-/// (fallback text FIRST, key SECOND) and the `format!` limitations that
-/// apply to the fallback text without the feature.
-///
-/// - `tp!("fallback", "key")`
-/// - `tp!("fallback", "key", name = value)`
+/// Accepts the same forms as [`ts!`]; see that macro for details.
 macro_rules! tp {
   ($($args:tt)*) => {
     println!("{}", ts!($($args)*));
@@ -188,7 +170,7 @@ pub fn activate_symlink(config: Config) -> Result {
   create_junction_link(symlink, root.join(last))?;
 
   tp!(
-    "node {} is activated.",
+    "node {version} is activated.",
     "activate_symlink_success",
     version = last.as_str()
   );
@@ -253,7 +235,7 @@ fn delete_version(root: &Path, ver: &str) -> Result {
 pub fn display_current() -> Result {
   if let Some(current_version) = get_current_version() {
     tp!(
-      "current version is {}",
+      "current version is {version}",
       "display_current_version",
       version = current_version.as_str()
     );
@@ -293,7 +275,7 @@ pub fn display_or_update_npm_mirror(
 
   if let Some(npm_mirror) = config.npm_mirror {
     tp!(
-      "Current NpmMirror: {}",
+      "Current NpmMirror: {mirror}",
       "npm_mirror_current",
       mirror = npm_mirror.as_str()
     );
@@ -315,7 +297,7 @@ pub fn display_or_update_node_mirror(
 
   if let Some(node_mirror) = config.node_mirror {
     tp!(
-      "Current NodeMirror: {}",
+      "Current NodeMirror: {mirror}",
       "node_mirror_current",
       mirror = node_mirror.as_str()
     );
@@ -334,14 +316,14 @@ where
     let p = path.as_ref();
     if !p.exists() {
       bail!(ts!(
-        "path {} does not exist",
+        "path {path} does not exist",
         "root_path_not_exist",
         path = p.display().to_string()
       ));
     }
     if !p.is_dir() {
       bail!(ts!(
-        "path {} is not a directory",
+        "path {path} is not a directory",
         "root_path_not_dir",
         path = p.display().to_string()
       ));
@@ -349,13 +331,13 @@ where
     config.root = Some(p.to_path_buf());
     config.save()?;
     tp!(
-      "Current Root: {}",
+      "Current Root: {root}",
       "root_current",
       root = p.display().to_string()
     );
   } else if let Some(root) = config.root {
     tp!(
-      "Current Root: {}",
+      "Current Root: {root}",
       "root_current",
       root = root.display().to_string()
     );
@@ -777,7 +759,7 @@ pub fn install_version(
   let (exists, ver) = version_exists(&db, &version, &root)?;
   if exists {
     bail!(ts!(
-      "version {} already installed",
+      "version {version} already installed",
       "install_version_exists",
       version = ver.as_str()
     ));
@@ -794,7 +776,7 @@ pub fn install_version(
     .filter(|s| !s.is_empty())
   else {
     bail!(ts!(
-      "invalid url: {}",
+      "invalid url: {url}",
       "install_invalid_url",
       url = url.as_str()
     ));
@@ -812,7 +794,7 @@ pub fn install_version(
     if !valid {
       tp!("failed.", "checksum_failed");
       let msg = ts!(
-        "sha256 checksum failed: {}",
+        "sha256 checksum failed: {file}",
         "install_checksum_failed",
         file = file_name
       );
@@ -833,7 +815,7 @@ pub fn install_version(
   fs::rename(org_path, dist_path)?;
 
   tp!(
-    "install {} completed.",
+    "install {version} completed.",
     "install_success",
     version = ver.as_str()
   );
@@ -874,7 +856,7 @@ where
   }
 
   bail!(ts!(
-    "checksum not found: {}",
+    "checksum not found: {package}",
     "checksum_not_found",
     package = package_name.as_str()
   ));
@@ -943,7 +925,7 @@ pub fn list_remote_versions(config: Config) -> Result {
 
   println!();
   tp!(
-    " * Note: The list only shows the latest {} versions. Visit https://nodejs.org/en/ for more info.",
+    " * Note: The list only shows the latest {count} versions. Visit https://nodejs.org/en/ for more info.",
     "list_remote_note",
     count = LIST_COUNT
   );
@@ -1056,7 +1038,7 @@ where
   let out_path = dest_dir.join(entry.mangled_name());
   if !out_path.starts_with(dest_dir) {
     bail!(ts!(
-      "illegal path in archive: {}",
+      "illegal path in archive: {path}",
       "extract_illegal_path",
       path = entry.name()
     ));
@@ -1085,7 +1067,7 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
   let current_ver = get_current_version();
   if !exists {
     bail!(ts!(
-      "version {} not installed",
+      "version {version} not installed",
       "switch_version_not_installed",
       version = ver.as_str()
     ));
@@ -1094,7 +1076,7 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
     && current_ver == ver
   {
     bail!(ts!(
-      "version {} is already used",
+      "version {version} is already used",
       "switch_version_already_used",
       version = ver.as_str()
     ));
@@ -1107,7 +1089,7 @@ pub fn switch_version(config: Config, version: VersionSpec) -> Result {
   reset_junction_link(get_env_symlink()?, node_path)?;
 
   tp!(
-    "switch to {} success.",
+    "switch to {version} success.",
     "switch_success",
     version = ver.as_str()
   );
@@ -1130,7 +1112,7 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
     VersionSpec::Exact(ver) => {
       if !versions.contains(&ver) {
         bail!(ts!(
-          "version {} not installed",
+          "version {version} not installed",
           "uninstall_version_not_installed",
           version = ver.as_str()
         ));
@@ -1139,7 +1121,7 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
         && current_ver == ver
       {
         bail!(ts!(
-          "version {} is in use, can not uninstall it",
+          "version {version} is in use, can not uninstall it",
           "uninstall_version_in_use",
           version = ver.as_str()
         ));
@@ -1148,7 +1130,7 @@ pub fn uninstall_version(config: Config, version: VersionSpec) -> Result {
       delete_version(&root, &ver)?;
 
       tp!(
-        "uninstall {} completed.",
+        "uninstall {version} completed.",
         "uninstall_success",
         version = ver.as_str()
       );
@@ -1189,7 +1171,7 @@ where
         s.clone()
       } else {
         bail!(ts!(
-          "version {} not exists.",
+          "version {version} not exists.",
           "version_not_exists",
           version = s.as_str()
         ))
@@ -1322,6 +1304,23 @@ mod tests {
       i18n.get_message("version_latest_not_found"),
       "No latest version found."
     );
+  }
+
+  // ---------- ts! positional args ----------
+
+  // Verify that positional arguments are mapped to numeric indices
+  // correctly ("0", "1", "2") — not stringified expressions.
+  #[cfg(feature = "i18n")]
+  #[test]
+  fn ts_positional_args_test() {
+    let result = ts!(
+      "fallback: {} {} {}",
+      "test_positional_args",
+      "alpha",
+      "beta",
+      "gamma"
+    );
+    assert_eq!(result, "first: alpha, second: beta, third: gamma");
   }
 
   // ---------- get_nvm_symlink ----------
