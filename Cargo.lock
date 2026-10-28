@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "nvm-windows"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1365,7 +1365,7 @@ dependencies = [
  "unic-langid",
  "ureq",
  "url",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
  "winreg",
  "winresource",
  "zip",
