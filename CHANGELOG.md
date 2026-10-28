@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/Ouka2020/nvm-rs/compare/v0.1.4...v0.1.5) - 2026-10-28
+
+### Added
+
+- *(i18n)* 为 setup 流程添加完整的国际化支持
+- *(i18n)* 为 ts! 宏添加位置参数支持
+- *(i18n)* 重构翻译宏并全面接入国际化支持
+- 新增国际化(i18n)支持和多语言资源文件
+- *(config)* 添加配置默认值和镜像选择功能
+
+### Fixed
+
+- *(build)* 更新依赖并修复 Windows 构建配置
+
+### Other
+
+- 更新 release-plz 的 GitHub 令牌密钥
+- 更新 Cargo.lock 中的依赖版本
+- *(ts)* 移除 ts! 宏的位置参数支持
+- *(mirror)* 重构镜像索引查找逻辑
+
 ## [0.1.4](https://github.com/Ouka2020/nvm-rs/compare/v0.1.3...v0.1.4) - 2026-10-05
 
 ### Other
